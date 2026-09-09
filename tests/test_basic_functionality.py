@@ -163,7 +163,7 @@ def test_scenario_file_validation():
     
     # Create a simple test scenario file
     scenario_content = """
-schema_version: 1
+schema_version: "1"
 id: test-scenario-file
 version: 1
 title: Test Scenario File

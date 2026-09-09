@@ -291,7 +291,7 @@ The harness includes comprehensive tests:
 
 ```bash
 # Install dependencies (if needed)
-pip install -r requirements.txt
+python3 -m pip install -e .
 
 # Run smoke tests
 python3 -m pytest tests/test_smoke.py -v

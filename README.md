@@ -2,6 +2,9 @@
 
 Deterministic protocol/runtime test harness for the Benro Polaris ecosystem.
 
+For step-by-step usage, including simulation controls and image upload, see the
+[user guide](USER-GUIDE.md).
+
 This repository exists because repeated physical testing has shown that a visible camera failure can originate at several different layers:
 
 ```text
@@ -193,8 +196,8 @@ A new web interface provides browser-based simulation and evidence upload:
 **Access the web interface:**
 ```bash
 # Start the web server
-python3 -m pip install flask
-python3 src/polaris_harness/web_interface.py
+python3 -m pip install -e .
+python3 -m polaris_harness.web_interface
 
 # Visit http://localhost:5000 in your browser
 ```
@@ -214,7 +217,7 @@ python3 -m pytest tests/test_evidence_validation.py -v
 
 # All tests
 python3 -m pytest tests/ -v
-# Results: 34 passed ✅
+# Results: 61 passed
 ```
 
 ## Usage Examples
@@ -281,7 +284,7 @@ else:
 4. **Backward Compatibility**: Existing functionality preserved
 5. **User-Friendly Interface**: Web-based simulation and testing
 6. **Hardware-Aware**: Reflects actual hardware configuration
-7. **Enhanced Testing**: Comprehensive test coverage with 34 passing tests
+7. **Enhanced Testing**: Comprehensive test coverage with 61 passing tests
 8. **Platesolving Support**: Real image upload for next capture simulation
 
 ## Testing the Harness
@@ -290,7 +293,7 @@ else:
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+python3 -m pip install -e .
 
 # Run smoke tests
 python3 -m pytest tests/test_smoke.py -v
@@ -320,7 +323,7 @@ The Benro Polaris Test Harness has been significantly enhanced with:
 - **Comprehensive Web Interface**: Browser-based simulation and testing
 - **Backward Compatibility**: Existing functionality preserved
 - **Platesolving Support**: Real image upload for next capture simulation
-- **Robust Testing**: 34 passing tests with comprehensive coverage
+- **Robust Testing**: 61 passing tests with comprehensive coverage
 
 The harness now provides a complete solution for deterministic protocol/runtime testing with advanced validation, evidence management, and an intuitive web interface for simulation and testing!
 

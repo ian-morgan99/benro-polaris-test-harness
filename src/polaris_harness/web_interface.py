@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 from .validation import (
     validate_scenario,
     validate_evidence,
-    validate_scenario_file,
+    validate_scenario_file as validate_scenario_path,
     validate_evidence_file,
 )
 from .evidence import validate_and_store_evidence, get_evidence, get_all_evidence
@@ -33,6 +33,7 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+next_capture_images: Dict[str, Path] = {}
 
 
 def allowed_file(filename: str) -> bool:
@@ -227,14 +228,7 @@ def index():
             
             function selectHardware(type, element) {
                 selectedHardware[type] = !selectedHardware[type];
-                
-                // Update visual selection
-                const options = document.querySelectorAll('.hardware-option');
-                options.forEach(opt => opt.classList.remove('selected'));
-                element.classList.add('selected');
-                
-                // Update the hidden input
-                document.getElementById(type).value = selectedHardware[type];
+                element.classList.toggle('selected', selectedHardware[type]);
             }
             
             function handlePlatesolveUpload(input) {
@@ -564,6 +558,17 @@ def simulate_power_button():
 def generate_fake_jpg():
     """Generate a fake JPG file for testing."""
     try:
+        camera_id = (request.get_json(silent=True) or {}).get("camera_id")
+        queued_image = next_capture_images.pop(camera_id, None) if camera_id else None
+        if queued_image:
+            return jsonify({
+                "success": True,
+                "message": "Queued platesolving image returned for simulated capture",
+                "file_path": str(queued_image),
+                "file_hash": generate_file_hash(queued_image),
+                "filename": queued_image.name,
+            })
+
         # Generate a unique filename
         filename = f"fake_jpg_{uuid.uuid4().hex[:8]}.jpg"
         file_path = Path(app.config['UPLOAD_FOLDER']) / filename
@@ -681,8 +686,43 @@ def upload_evidence():
         }), 500
 
 
+@app.route('/api/upload-platesolve-image', methods=['POST'])
+def upload_platesolve_image():
+    """Store a selected image for the next simulated capture."""
+    try:
+        data = request.get_json() or {}
+        image_data = data.get("image_data", "")
+        if not image_data.startswith("data:image/") or "," not in image_data:
+            return jsonify({"success": False, "message": "No image data provided"}), 400
+
+        import base64
+
+        filename = f"next-capture-{uuid.uuid4().hex[:8]}.jpg"
+        file_path = Path(app.config["UPLOAD_FOLDER"]) / filename
+        encoded_image = image_data.split(",", 1)[1]
+        file_path.write_bytes(base64.b64decode(encoded_image, validate=True))
+        camera_id = data.get("camera_id", "")
+        if not camera_id:
+            file_path.unlink()
+            return jsonify({"success": False, "message": "Camera ID is required"}), 400
+        next_capture_images[camera_id] = file_path
+
+        return jsonify({
+            "success": True,
+            "message": "Image queued for the next simulated capture",
+            "camera_id": camera_id,
+            "description": data.get("description", ""),
+            "file_path": str(file_path),
+            "file_hash": generate_file_hash(file_path),
+        })
+    except (ValueError, base64.binascii.Error) as error:
+        return jsonify({"success": False, "message": f"Invalid image data: {error}"}), 400
+    except Exception as error:
+        return jsonify({"success": False, "message": f"Error uploading platesolving image: {error}"}), 500
+
+
 @app.route('/api/validate-scenario', methods=['POST'])
-def validate_scenario_file():
+def validate_scenario_upload():
     """Validate scenario file."""
     try:
         if 'file' not in request.files:
@@ -704,7 +744,7 @@ def validate_scenario_file():
         file.save(str(file_path))
         
         # Validate the file
-        errors = validate_scenario_file(file_path)
+        errors = validate_scenario_path(file_path)
         
         return jsonify({
             "success": True,
@@ -714,13 +754,13 @@ def validate_scenario_file():
         })
         
     except Exception as e:
-n            return jsonify({
-                "success": False,
-                "message": f"Error validating scenario: {str(e)}"
-            }), 500
+        return jsonify({
+            "success": False,
+            "message": f"Error validating scenario: {str(e)}"
+        }), 500
 
 
 if __name__ == '__main__':
     print("Starting Benro Polaris Test Harness Web Interface...")
     print("Visit http://localhost:5000 in your browser")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5000, debug=False)

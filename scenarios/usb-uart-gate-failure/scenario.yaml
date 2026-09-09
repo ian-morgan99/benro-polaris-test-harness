@@ -5,6 +5,20 @@ title: USB-UART gate failure prevents firmware install
 
 source: physical
 status: confirmed
+observed_layer: polaris-runtime
+source_issue: ian-morgan99/PrivateResearch#evidence-20260904
+camera:
+  manufacturer: Pentax
+  model: K-3 III
+  firmware: unknown
+  usb_mode: MTP
+  usb_id: "25fb:0189"
+polaris:
+  firmware: "4.0.0.32"
+  patcher_sha: "unknown"
+  fwpkt_sha256: "92da888387b14dc02976b5fa22b94067"
+libgphoto2:
+  sha: "unknown"
 endpoints:
   command:
     transport: tcp
