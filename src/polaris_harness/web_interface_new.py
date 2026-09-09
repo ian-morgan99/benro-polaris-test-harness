@@ -681,6 +681,96 @@ def upload_evidence():
         }), 500
 
 
+@app.route('/api/upload-platesolve-image', methods=['POST'])
+def upload_platesolve_image():
+    """Upload platesolving image for next capture simulation."""
+    try:
+        data = request.get_json()
+        camera_id = data.get('camera_id', 'K-3-III-25fb-0189')
+        description = data.get('description', 'Platesolving test image')
+        image_data = data.get('image_data')
+        
+        if not image_data:
+            return jsonify({
+                "success": False,
+                "message": "No image data provided"
+            }), 400
+        
+        # Generate a unique filename
+        filename = f"platesolve_{uuid.uuid4().hex[:8]}.jpg"
+        file_path = Path(app.config['UPLOAD_FOLDER']) / filename
+        
+        # Decode base64 image data
+        import base64
+        image_data = image_data.split(',')[1]  # Remove data URL prefix
+        with open(file_path, 'wb') as f:
+            f.write(base64.b64decode(image_data))
+        
+        # Generate hash
+        file_hash = generate_file_hash(file_path)
+        
+        # Generate evidence ID
+        evidence_id = f"platesolve_{uuid.uuid4().hex[:8]}"
+        
+        # Create evidence record
+        evidence = {
+            "schema_version": "1",
+            "evidence_id": evidence_id,
+            "source": "synthetic",
+            "status": "confirmed",
+            "observed_date": datetime.now().strftime('%Y-%m-%d'),
+            "observed_layer": "polaris-runtime",
+            "source_issue": f"web-platesolve-{evidence_id}",
+            "camera": {
+                "manufacturer": "Test",
+                "model": "Test Camera",
+                "firmware": "1.0.0",
+                "usb_mode": "MTP",
+                "usb_id": "0000:0000"
+            },
+            "polaris": {
+                "firmware": "1.0.0",
+                "patcher_sha": "unknown",
+                "fwpkt_sha256": "unknown"
+            },
+            "libgphoto2": {
+                "sha": "unknown"
+            },
+            "artifacts": [
+                {
+                    "path": str(file_path),
+                    "sha256": file_hash,
+                    "source_provenance": "web-platesolve",
+                    "target_abi": "arm64",
+                    "expected_path": str(file_path)
+                }
+            ]
+        }
+        
+        # Validate and store evidence
+        errors = validate_and_store_evidence(evidence)
+        
+        if errors:
+            return jsonify({
+                "success": False,
+                "message": f"Evidence validation failed: {errors}"
+            }), 400
+        
+        return jsonify({
+            "success": True,
+            "message": "Platesolving image uploaded successfully",
+            "evidence_id": evidence_id,
+            "file_path": str(file_path),
+            "file_hash": file_hash
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error uploading platesolving image: {str(e)}"
+        }), 500
+
+
 @app.route('/api/validate-scenario', methods=['POST'])
 def validate_scenario_file():
     """Validate scenario file."""
@@ -714,13 +804,15 @@ def validate_scenario_file():
         })
         
     except Exception as e:
-n            return jsonify({
-                "success": False,
-                "message": f"Error validating scenario: {str(e)}"
-            }), 500
+        return jsonify({
+            "success": False,
+            "message": f"Error validating scenario: {str(e)}"
+        }), 500
 
 
 if __name__ == '__main__':
     print("Starting Benro Polaris Test Harness Web Interface...")
     print("Visit http://localhost:5000 in your browser")
     app.run(host='0.0.0.0', port=5000, debug=True)
+"""
+    return html
