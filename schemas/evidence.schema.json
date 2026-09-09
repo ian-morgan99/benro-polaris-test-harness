@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Evidence Schema",
+  "description": "Schema for evidence records in the Benro Polaris Test Harness",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "source",
+    "status",
+    "observed_date",
+    "observed_layer",
+    "source_issue",
+    "camera",
+    "polaris",
+    "libgphoto2"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version"
+    },
+    "evidence_id": {
+      "type": "string",
+      "description": "Unique evidence identifier"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["physical", "synthetic", "derived"],
+      "description": "Source of the evidence"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["confirmed", "provisional", "synthetic", "superseded"],
+      "description": "Evidence status"
+    },
+    "observed_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of observation"
+    },
+    "observed_layer": {
+      "type": "string",
+      "enum": ["polaris-protocol", "polaris-runtime", "libgphoto2", "physical-camera"],
+      "description": "Layer where evidence was observed"
+    },
+    "source_issue": {
+      "type": "string",
+      "description": "Source issue reference"
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "manufacturer": {
+          "type": "string",
+          "description": "Camera manufacturer"
+        },
+        "model": {
+          "type": "string",
+          "description": "Camera model"
+        },
+        "firmware": {
+          "type": "string",
+          "description": "Camera firmware version"
+        },
+        "usb_mode": {
+          "type": "string",
+          "description": "USB mode"
+        },
+        "usb_id": {
+          "type": "string",
+          "description": "USB vendor:product ID"
+        }
+      },
+      "required": ["manufacturer", "model", "firmware", "usb_mode", "usb_id"]
+    },
+    "polaris": {
+      "type": "object",
+      "properties": {
+        "firmware": {
+          "type": "string",
+          "description": "Polaris firmware version"
+        },
+        "patcher_sha": {
+          "type": "string",
+          "description": "Patcher SHA"
+        },
+        "fwpkt_sha256": {
+          "type": "string",
+          "description": "FwPkt SHA-256"
+        }
+      },
+      "required": ["firmware", "patcher_sha", "fwpkt_sha256"]
+    },
+    "libgphoto2": {
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": "string",
+          "description": "libgphoto2 SHA"
+        }
+      },
+      "required": ["sha"]
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Artifact path"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 hash"
+          },
+          "transformation": {
+            "type": "string",
+            "description": "Transformation applied"
+          }
+        },
+        "required": ["path", "sha256"]
+      },
+      "description": "List of artifacts with hashes"
+    },
+    "transformations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Transformation description"
+      },
+      "description": "List of transformations applied"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Limitation description"
+      },
+      "description": "Known limitations"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Evidence record for physical or derived behavior"
+}

@@ -1,0 +1,67 @@
+schema_version: "1"
+id: usb-uart-gate-failure
+version: 1
+title: USB-UART gate failure prevents firmware install
+
+source: physical
+status: confirmed
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+
+initial_state: idle
+
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+
+states:
+  idle:
+    on_request:
+      - id: check_usb_uart
+        match:
+          type: exact_text
+          value: "SP_TtyUsbUartInit"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "SP_TtyUsbUartInit failed: no USB-UART device"
+          - type: transition
+            next_state: usb_uart_failed
+
+  usb_uart_failed:
+    on_request:
+      - id: upgrade_check
+        match:
+          type: exact_text
+          value: "SP_UpgradeCheckFw"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "SP_UpgradeCheckFw: USB-UART gate failed, aborting upgrade"
+          - type: transition
+            next_state: upgrade_aborted
+
+  upgrade_aborted:
+    emit_marker: upgrade_aborted
+
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+
+assertions:
+  - usb_uart_gate_failure_is_detected
+  - upgrade_aborts_when_usb_uart_missing
+  - error_message_contains_usb_uart_reference

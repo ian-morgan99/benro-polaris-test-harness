@@ -1,0 +1,24 @@
+id: pre-probe-20260831-181850
+version: 1
+title: Pre-probe state evidence from 2026-08-31 18:18:50 UTC
+source: physical
+status: confirmed
+observed_layer: polaris-runtime
+camera:
+  manufacturer: unknown
+  model: unknown
+  firmware: unknown
+  usb_mode: unknown
+  usb_id: unknown
+polaris:
+  firmware: unknown
+  patcher_sha: unknown
+  fwpkt_sha256: unknown
+libgphoto2:
+  sha: unknown
+source_issue: unknown
+observed_date: 2026-08-31
+limitations:
+  - The firmware version is not explicitly stated in the evidence.
+  - No camera-specific protocol traces are available.
+  - This represents the state before any firmware update or probe activity.

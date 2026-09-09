@@ -1,0 +1,279 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Scenario Schema",
+  "description": "Schema for deterministic scenarios in the Benro Polaris Test Harness",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "title",
+    "source",
+    "status",
+    "endpoints",
+    "initial_state",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,79}$",
+      "description": "Stable scenario identifier"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Scenario version"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable title"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["physical", "synthetic", "derived"],
+      "description": "Source of the scenario behavior"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["confirmed", "provisional", "synthetic", "superseded"],
+      "description": "Scenario status"
+    },
+    "endpoints": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "type": "string",
+              "enum": ["tcp", "http"],
+              "description": "Transport protocol"
+            },
+            "framing": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["delimiter", "fixed_length", "raw_connection"],
+                  "description": "Framing type"
+                },
+                "delimiter_text": {
+                  "type": "string",
+                  "description": "Delimiter text for delimiter framing"
+                }
+              }
+            },
+            "bind": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "string",
+                  "description": "Host to bind to"
+                },
+                "port": {
+                  "type": "integer",
+                  "description": "Port to bind to"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "manufacturer": {
+          "type": "string",
+          "description": "Camera manufacturer"
+        },
+        "model": {
+          "type": "string",
+          "description": "Camera model"
+        },
+        "firmware": {
+          "type": "string",
+          "description": "Camera firmware version"
+        },
+        "usb_mode": {
+          "type": "string",
+          "description": "USB mode"
+        },
+        "usb_id": {
+          "type": "string",
+          "description": "USB vendor:product ID"
+        }
+      }
+    },
+    "libgphoto2": {
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": "string",
+          "description": "SHA hash"
+        }
+      }
+    },
+    "observed_layer": {
+      "type": "string",
+      "enum": ["polaris-protocol", "polaris-runtime", "libgphoto2", "physical-camera"],
+      "description": "Layer where evidence was observed"
+    },
+    "polaris": {
+      "type": "object",
+      "properties": {
+        "firmware": {
+          "type": "string",
+          "description": "Polaris firmware version"
+        },
+        "patcher_sha": {
+          "type": "string",
+          "description": "Patcher SHA"
+        },
+        "fwpkt_sha256": {
+          "type": "string",
+          "description": "FwPkt SHA-256"
+        }
+      }
+    },
+    "source_issue": {
+      "type": "string",
+      "description": "Source issue reference"
+    },
+    "evidence_id": {
+      "type": "string",
+      "description": "Evidence identifier"
+    },
+    "initial_state": {
+      "type": "string",
+      "description": "Initial state name"
+    },
+    "states": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "on_request": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Request identifier"
+                },
+                "match": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["exact_bytes", "exact_text", "regex_text", "fields", "any"],
+                      "description": "Matcher type"
+                    },
+                    "value": {
+                      "type": "string",
+                      "description": "Match value"
+                    },
+                    "encoding": {
+                      "type": "string",
+                      "enum": ["utf-8", "hex"],
+                      "description": "Text encoding"
+                    },
+                    "hex": {
+                      "type": "string",
+                      "description": "Hex value for exact_bytes matching"
+                    },
+                    "pattern": {
+                      "type": "string",
+                      "description": "Regex pattern for regex_text matching"
+                    },
+                    "rationale": {
+                      "type": "string",
+                      "description": "Rationale for regex_text matching"
+                    }
+                  }
+                },
+                "actions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["send", "close_connection", "set_endpoint_available", "emit_marker", "transition"],
+                        "description": "Action type"
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "description": "Endpoint name"
+                      },
+                      "after_ms": {
+                        "type": "integer",
+                        "description": "Delay in milliseconds"
+                      },
+                      "text": {
+                        "type": "string",
+                        "description": "Text to send"
+                      },
+                      "available": {
+                        "type": "boolean",
+                        "description": "Endpoint availability"
+                      },
+                      "marker": {
+                        "type": "string",
+                        "description": "Marker name"
+                      },
+                      "next_state": {
+                        "type": "string",
+                        "description": "Next state name"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "description": "State definitions"
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_frame_bytes": {
+          "type": "integer",
+          "description": "Maximum frame size in bytes"
+        },
+        "max_connections": {
+          "type": "integer",
+          "description": "Maximum number of connections"
+        },
+        "scenario_timeout_ms": {
+          "type": "integer",
+          "description": "Scenario timeout in milliseconds"
+        }
+      },
+      "required": ["max_frame_bytes", "max_connections", "scenario_timeout_ms"]
+    },
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Assertion description"
+      },
+      "description": "List of assertions to verify"
+    },
+    "personality": {
+      "type": "string",
+      "description": "Personality ID to use"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A deterministic scenario for testing Polaris protocol behavior"
+}

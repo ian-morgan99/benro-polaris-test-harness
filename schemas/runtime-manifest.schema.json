@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Runtime Manifest Schema",
+  "description": "Schema for runtime manifests in the Benro Polaris Test Harness",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "title",
+    "source",
+    "status",
+    "artifacts",
+    "resolution_rules"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version"
+    },
+    "id": {
+      "type": "string",
+      "description": "Manifest identifier"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Manifest version"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable title"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["physical", "synthetic", "derived"],
+      "description": "Source of the manifest"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["confirmed", "provisional", "synthetic", "superseded"],
+      "description": "Manifest status"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Artifact path"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 hash"
+          },
+          "source_provenance": {
+            "type": "string",
+            "description": "Source provenance"
+          },
+          "target_abi": {
+            "type": "string",
+            "description": "Target ABI"
+          },
+          "expected_path": {
+            "type": "string",
+            "description": "Expected resolution path"
+          },
+          "environment": {
+            "type": "object",
+            "description": "Environment variables"
+          }
+        },
+        "required": ["path", "sha256", "source_provenance", "target_abi", "expected_path"]
+      },
+      "description": "List of artifacts with metadata"
+    },
+    "resolution_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "artifact_path": {
+            "type": "string",
+            "description": "Artifact path pattern"
+          },
+          "resolution_method": {
+            "type": "string",
+            "enum": ["ld_preload", "ld_library_path", "dlopen_search", "explicit_path"],
+            "description": "Resolution method"
+          },
+          "fallback_paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Fallback path"
+            },
+            "description": "Fallback paths"
+          },
+          "evidence_id": {
+            "type": "string",
+            "description": "Evidence identifier"
+          }
+        },
+        "required": ["artifact_path", "resolution_method"]
+      },
+      "description": "Resolution rules for artifacts"
+    },
+    "runtime_assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "assertion": {
+            "type": "string",
+            "description": "Assertion description"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["error", "warning", "info"],
+            "description": "Assertion severity"
+          }
+        },
+        "required": ["assertion", "severity"]
+      },
+      "description": "Runtime assertions"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Runtime manifest for package validation"
+}

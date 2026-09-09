@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Personality Schema",
+  "description": "Schema for camera personalities in the Benro Polaris Test Harness",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "title",
+    "source",
+    "status",
+    "camera",
+    "polaris",
+    "libgphoto2"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version"
+    },
+    "id": {
+      "type": "string",
+      "description": "Personality identifier"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Personality version"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable title"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["physical", "synthetic", "derived"],
+      "description": "Source of the personality"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["confirmed", "provisional", "synthetic", "superseded"],
+      "description": "Personality status"
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "manufacturer": {
+          "type": "string",
+          "description": "Camera manufacturer"
+        },
+        "model": {
+          "type": "string",
+          "description": "Camera model"
+        },
+        "firmware": {
+          "type": "string",
+          "description": "Camera firmware version"
+        },
+        "usb_mode": {
+          "type": "string",
+          "description": "USB mode"
+        },
+        "usb_id": {
+          "type": "string",
+          "description": "USB vendor:product ID"
+        }
+      },
+      "required": ["manufacturer", "model", "firmware", "usb_mode", "usb_id"]
+    },
+    "polaris": {
+      "type": "object",
+      "properties": {
+        "firmware": {
+          "type": "string",
+          "description": "Polaris firmware version"
+        },
+        "patcher_sha": {
+          "type": "string",
+          "description": "Patcher SHA"
+        },
+        "fwpkt_sha256": {
+          "type": "string",
+          "description": "FwPkt SHA-256"
+        }
+      },
+      "required": ["firmware", "patcher_sha", "fwpkt_sha256"]
+    },
+    "libgphoto2": {
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": "string",
+          "description": "libgphoto2 SHA"
+        }
+      },
+      "required": ["sha"]
+    },
+    "evidence_id": {
+      "type": "string",
+      "description": "Evidence identifier"
+    },
+    "settings": {
+      "type": "object",
+      "description": "Camera settings enumeration"
+    },
+    "capture": {
+      "type": "object",
+      "description": "Capture behavior"
+    },
+    "preview": {
+      "type": "object",
+      "description": "Preview behavior"
+    },
+    "known_limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Known limitation"
+      },
+      "description": "Known limitations"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Camera personality for test harness"
+}
