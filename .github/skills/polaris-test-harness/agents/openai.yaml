@@ -1,0 +1,4 @@
+interface:
+  display_name: "Polaris Test Harness"
+  short_description: "Build and run evidence-backed Polaris regression scenarios"
+  default_prompt: "Use the Polaris test harness to model verified evidence and run consumer regression checks."
