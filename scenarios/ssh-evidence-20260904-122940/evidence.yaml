@@ -1,0 +1,23 @@
+schema_version: "1"
+evidence_id: ssh-evidence-20260904-122940
+source: physical
+status: confirmed
+observed_layer: polaris-runtime
+camera:
+  manufacturer: unknown
+  model: unknown
+  firmware: unknown
+  usb_mode: unknown
+  usb_id: unknown
+polaris:
+  firmware: unknown
+  patcher_sha: unknown
+  fwpkt_sha256: unknown
+libgphoto2:
+  sha: unknown
+source_issue: unknown
+observed_date: "2026-09-04"
+limitations:
+  - The SSH probe captured boot environment but no camera-specific protocol traces.
+  - Firmware version is not explicitly stated in the evidence.
+  - No requests, responses, or capture events are available.
