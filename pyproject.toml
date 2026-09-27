@@ -38,6 +38,7 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "black>=23.0.0",
+    "pytest-cov>=5.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -46,6 +47,8 @@ packages = ["src/polaris_harness"]
 [tool.ruff]
 line-length = 88
 target-version = "py312"
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
