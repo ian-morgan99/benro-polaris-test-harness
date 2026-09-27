@@ -1,6 +1,5 @@
-id: pre-probe-20260831-181850
-version: 1
-title: Pre-probe state evidence from 2026-08-31 18:18:50 UTC
+schema_version: "1"
+evidence_id: pre-probe-20260831-181850
 source: physical
 status: confirmed
 observed_layer: polaris-runtime
@@ -17,7 +16,7 @@ polaris:
 libgphoto2:
   sha: unknown
 source_issue: unknown
-observed_date: 2026-08-31
+observed_date: "2026-08-31"
 limitations:
   - The firmware version is not explicitly stated in the evidence.
   - No camera-specific protocol traces are available.

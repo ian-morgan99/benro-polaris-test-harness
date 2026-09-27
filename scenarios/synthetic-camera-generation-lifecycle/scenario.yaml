@@ -1,0 +1,53 @@
+schema_version: "1"
+id: synthetic-camera-generation-lifecycle
+version: 1
+title: Synthetic camera generation, stale completion and cancellation contract
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: generation-1-ready
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  generation-1-ready:
+    on_request:
+      - id: capture-generation-1
+        match: {type: exact_text, value: "CAPTURE generation=1#", encoding: utf-8}
+        actions:
+          - {type: send, endpoint: command, after_ms: 0, text: "CAPTURE_ACCEPTED generation=1#"}
+          - {type: transition, endpoint: command, after_ms: 0, next_state: generation-1-active}
+  generation-1-active:
+    on_request:
+      - id: camera-disappears
+        match: {type: exact_text, value: "CAMERA_GONE generation=1#", encoding: utf-8}
+        actions:
+          - {type: send, endpoint: command, after_ms: 0, text: "SESSION_ENDED generation=1 mount_state=preserved#"}
+          - {type: transition, endpoint: command, after_ms: 0, next_state: generation-2-ready}
+  generation-2-ready:
+    on_request:
+      - id: stale-generation-1-completion
+        match: {type: exact_text, value: "CAPTURE_COMPLETE generation=1#", encoding: utf-8}
+        actions:
+          - {type: send, endpoint: command, after_ms: 0, text: "STALE_REJECTED expected_generation=2 received_generation=1#"}
+      - id: capture-generation-2
+        match: {type: exact_text, value: "CAPTURE generation=2#", encoding: utf-8}
+        actions:
+          - {type: send, endpoint: command, after_ms: 0, text: "CAPTURE_ACCEPTED generation=2#"}
+          - {type: transition, endpoint: command, after_ms: 0, next_state: generation-2-active}
+  generation-2-active:
+    on_request:
+      - id: cancel-generation-2
+        match: {type: exact_text, value: "CANCEL generation=2#", encoding: utf-8}
+        actions:
+          - {type: send, endpoint: command, after_ms: 0, text: "CANCELLED generation=2 ownership=released#"}
+          - {type: transition, endpoint: command, after_ms: 0, next_state: generation-2-ready}
