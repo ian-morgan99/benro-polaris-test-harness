@@ -108,6 +108,24 @@ class ARMEmulator:
 
     Executes ARM binaries in an isolated user-space environment with explicit
     ABI stubs for external boundaries (camera, libgphoto, OS, timer, callbacks).
+
+    **Each ARMEmulator instance is a clean, isolated emulation environment.**
+    Create a new instance for every test case or use case — do not reuse a
+    single emulator across multiple scenarios. All state (CPU registers,
+    memory, instruction count, stub call records, hook state) is reset on
+    construction and never shared between instances.
+
+    Example:
+
+        from polaris_harness.arm_emulator import ARMEmulator, EmulationConfig
+
+        # Fresh instance for test case 1
+        emu1 = ARMEmulator(EmulationConfig(...))
+        result1 = emu1.run()
+
+        # Fresh instance for test case 2 — no state leaks from emu1
+        emu2 = ARMEmulator(EmulationConfig(...))
+        result2 = emu2.run()
     """
 
     def __init__(self, config: EmulationConfig):

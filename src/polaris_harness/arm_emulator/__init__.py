@@ -19,8 +19,14 @@ Provides Unicorn-based ARM (Thumb) CPU emulation for exact, provenance-identifie
 ARM binaries or extracted code regions. This is an independent harness component
 and does not depend on the Polaris protocol scenario engine or runtime verifier.
 
+**Instance isolation**: Each `ARMEmulator()` instantiation is a clean, isolated
+emulation environment. Create a new instance for every test case or use case —
+do not reuse a single emulator across multiple scenarios. All state (CPU
+registers, memory, instruction count, stub call records, hook state) is reset
+on construction and never shared between instances.
+
 Public API:
-- ARMEmulator: Core Unicorn-based ARM emulator
+- ARMEmulator: Core Unicorn-based ARM emulator (create a new instance per test case)
 - EmulationConfig: Configuration for an emulation run
 - EmulationResult: Emulation outcome enumeration
 - EmulationResultRecord: Machine-readable result record
