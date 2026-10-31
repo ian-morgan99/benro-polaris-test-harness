@@ -357,9 +357,9 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
             emulator_version=args.emulator_version or "unknown",
         )
 
-        all_passed = True
         all_skipped = True
         any_real_failure = False
+        any_partial = False
         skip_reasons = []
         for case, result in results.items():
             if result.skipped:
@@ -368,14 +368,27 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
                     skip_reasons.append(result.skip_reason)
                 continue
             all_skipped = False
-            status = "PASS" if result.passed else "FAIL"
+            # PARTIAL, not PASS: the assertions that could be evaluated held, but
+            # some could not be evaluated at all against this artifact. Printing
+            # PASS here would be exactly the false green this reporting exists to
+            # prevent - the spec is not verified just because nothing contradicted it.
+            if result.is_partial:
+                status = "PARTIAL"
+                any_partial = True
+            else:
+                status = "PASS" if result.passed else "FAIL"
             # Show which region the case actually ran against: cases 1-4 are
             # re-pointed to the fixture that owns their edge, and without this
             # the reader cannot tell which artifact produced the result.
             shown = f" [{result.fixture_name}]" if result.fixture_name else ""
             print(f"  {case.value}: {status}{shown}")
-            if not result.passed:
-                all_passed = False
+            if result.is_partial:
+                for note in result.not_evaluated:
+                    print(f"    ~ not evaluated: {note}")
+            # passed is False for a partial result too, so this must be gated on
+            # is_partial or a coverage gap would be counted as a behavioural
+            # failure and force exit 3 instead of 4.
+            if not result.passed and not result.is_partial:
                 any_real_failure = True
                 for err in result.assertion_errors:
                     print(f"    - {err}")
@@ -393,12 +406,17 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
             for reason in skip_reasons:
                 print(f"    - {reason}")
             return 0
-        if all_passed:
-            print("✓ All ARM lifecycle cases passed")
-            return 0
-        else:
+        if any_real_failure:
             print("✗ Some ARM lifecycle cases failed")
             return 3
+        if any_partial:
+            # Distinct from 0: nothing was contradicted, but part of issue #251's
+            # spec was never exercised. Returning 0 here would let a coverage gap
+            # look like verified behaviour in CI.
+            print("⚠ All evaluated ARM lifecycle assertions held; some could not be evaluated")
+            return 4
+        print("✓ All ARM lifecycle cases passed")
+        return 0
 
     elif args.fixture:
         # Run a single fixture emulation
@@ -434,18 +452,25 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
             emulator.register_stub(name, handler)
         for name, shape in getattr(registry, "_abi_shapes", {}).items():
             emulator.set_stub_abi_shape(name, shape)
+        coerce = FixtureManager._coerce_int
         for entry in fixture.stub_entries:
-            address = entry.get("address")
+            address = coerce(entry.get("address"))
             stub_name = entry.get("stub_name")
             if address is None or stub_name is None:
-                continue
+                # Fail closed: an entry we cannot interpret is a fixture defect,
+                # and silently skipping it would run with fewer boundaries wired
+                # than the sidecar declares - assertions would then pass against
+                # an artifact that never had those edges intercepted.
+                print(f"✗ Fixture {args.fixture} declares a stub entry with a "
+                      f"missing or unparseable address/stub_name: {entry!r}")
+                return 2
             if stub_name not in emulator._stub_registry:
                 print(f"✗ Fixture declares a stub entry for unregistered stub "
                       f"{stub_name!r}")
                 return 2
             emulator.register_stub_entry(
                 stub_name,
-                int(address),
+                address,
                 function_name=entry.get("function_name"),
                 abi_shape=entry.get("abi_shape"),
                 model=entry.get("model", "call-site"),

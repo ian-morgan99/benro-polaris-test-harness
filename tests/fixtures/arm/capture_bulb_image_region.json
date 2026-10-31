@@ -182,6 +182,31 @@
         "why": "Initialised data the function reads through the same pointer chains."
       }
     ],
-    "memory_patches_note": "Both ranges lie inside the code mapping, so they are patched in place rather than mapped. .bss is deliberately left zero-filled: that is what a real process gives it. Sources are resolved from POLARIS_FIRMWARE_ROOT by basename and verified against source_binary_sha256 before use; no absolute host path is recorded here."
+    "memory_patches_note": "Both ranges lie inside the code mapping, so they are patched in place rather than mapped. .bss is deliberately left zero-filled: that is what a real process gives it. Sources are resolved from POLARIS_FIRMWARE_ROOT by basename and verified against source_binary_sha256 before use; no absolute host path is recorded here.",
+    "call_edge_inventory": {
+      "method": "Disassembled the 684-byte region with capstone CS_MODE_ARM from the retained ELF and resolved every BL target against .symtab and .rel.plt. Independent of the emulator, so it confirms the stub_entries list rather than inheriting it.",
+      "bl_sites_total": 17,
+      "named_targets": {
+        "getValueWithSeetingsForKey": 2,
+        "getSettingsValueForKey": 1,
+        "pthread_cond_signal": 2,
+        "qsort": 1,
+        "textdomain": 3,
+        "pthread_getspecific": 2,
+        "capture_image_with_Bulb": 1,
+        "sp_async_thread_function": 1,
+        "stopCaptureImageForMessage": 1,
+        "camera_preview_enable": 1,
+        "HI_LOG_Print": 1,
+        "checkCameraStatus": 1
+      },
+      "absent_edges": [
+        "close",
+        "cancel",
+        "context_cancel"
+      ],
+      "absent_edges_evidence": "No BL to any close/cancel symbol exists in the region. Cross-checked by scanning all 721,500 instructions of the executable PT_LOAD for callers of gp_context_cancel (26 callers, all gp_filesystem_* / folder helpers), gp_port_close (4 callers: gp_camera_exit, gp_port_free, cb_arg_run, $a) and stopCaptureImageForMessage (2 callers: captureBulbImage, sonyBurstEvent). No function in this binary contains both a stop edge and a close or cancel edge.",
+      "significance": "Lifecycle cases 1-3 assert on close/cancel/context_cancel. Those edges are genuinely absent from this artifact - not unresolved, since all 17 BL sites are accounted for. The assertions encode issue #251's spec and must not be deleted to make the suite green; they are reported as not-evaluated instead."
+    }
   }
 }

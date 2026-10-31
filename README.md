@@ -120,7 +120,8 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 >
 > 1. Run the full ARM emulator test suite: `python -m pytest tests/test_arm_emulator.py -v`
 > 2. Run the ARM lifecycle suite via CLI: `polaris-harness arm-emulate --suite`
->    (expects exit 3 today — see *Current status* above; only case 4 should PASS)
+>    (expects exit 3 today — see *Current status* above; case 4 PASS, cases 1–3
+>    PARTIAL, cases 5–9 FAIL)
 > 3. Verify the tiny fixture executes end-to-end: `polaris-harness arm-emulate --fixture tiny_fixture --output /tmp/result.json` and confirm the JSON contract shows `result: "pass"` and `instructions_executed > 0`
 > 4. Run the complete test suite to check for regressions: `python -m pytest tests/ -v`
 > 5. Confirm no imports from `polaris_harness.engine`, `polaris_harness.runtime`, or `polaris_harness.transport` exist inside `src/polaris_harness/arm_emulator/`
@@ -141,8 +142,22 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 | case | status | why |
 |---|---|---|
 | 4 | **PASS** | runs against real `captureBulbImage` bytes with globals seeded; observes exactly one `stopCaptureImageForMessage` |
-| 1–3 | FAIL | assert on `close` / `cancel` / `context_cancel`, none of which exist in that function. The harness reports the unsatisfiable assertion rather than implying a firmware regression |
-| 5–9 | FAIL | run against `stage2_region`, which is pinned but not yet seeded — it faults after 33 instructions |
+| 1–3 | **PARTIAL** | the stop edge is verified; assertions on `close` / `cancel` / `context_cancel` cannot be evaluated — see below |
+| 5–9 | FAIL | run against `stage2_region`, which faults at `0x101b38` after 33 instructions on a store through a pointer derived from a zero-filled global |
+
+**Why cases 1–3 are PARTIAL, not PASS or FAIL.** Disassembling the 684-byte
+`captureBulbImage` region resolves all 17 BL sites, and none of them is a close,
+cancel, or context-cancel call. Cross-checking the whole executable segment (721,500
+instructions) finds `stopCaptureImageForMessage` called from only two functions
+(`captureBulbImage`, `sonyBurstEvent`) and `gp_context_cancel` from 26 — all of them
+`gp_filesystem_*` or folder helpers. **No function in this binary contains both a
+stop edge and a close or cancel edge.** The full inventory is recorded in the fixture
+sidecar under `provenance.call_edge_inventory`.
+
+Those assertions encode issue #251's spec, so they are kept and reported as *not
+evaluated* rather than deleted to get green. PARTIAL means nothing was contradicted
+and nothing was verified — it is deliberately not a pass, and `result.passed` is
+False for it.
 
 **Prerequisite:** cases 1–4 need `POLARIS_FIRMWARE_ROOT` pointing at the directory
 containing the retained `pgphoto.stage2ondisk`. Without it they SKIP — an unmet
@@ -152,8 +167,18 @@ environment prerequisite, deliberately not reported as a behavioural failure:
 export POLARIS_FIRMWARE_ROOT=/path/to/extracted_appfs/stage2-ondisk/ondisk
 ```
 
-With it set, `python -m pytest tests/` reports 287 passed; without it, 285 passed
-and 2 skipped. Both are green.
+With it set, `python -m pytest tests/` reports 293 passed and 3 skipped; without
+it, 291 passed and 5 skipped. Both are green.
+
+**Exit codes for `arm-emulate --suite`:**
+
+| code | meaning |
+|---|---|
+| 0 | every case passed |
+| 3 | at least one case failed on real behaviour — takes precedence over 4 |
+| 4 | nothing contradicted, but some assertions could not be evaluated |
+
+Exit 4 exists so unverified coverage cannot look like success in CI.
 
 ## Astro WebUI (Issue #20) — Agent Usage Guide
 
