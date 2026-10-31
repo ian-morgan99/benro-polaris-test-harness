@@ -5,6 +5,11 @@ __pycache__/
 .pytest_cache/
 uploads/
 
-# Stage-2 ARM binary region — extracted locally from pgphoto.stage2ondisk
-# in the private research repo. Do NOT commit to GitHub.
+# Proprietary Benro firmware regions — extracted locally from
+# pgphoto.stage2ondisk in the private research repo. Never commit to GitHub.
+# Each has a committed .json sidecar (coordinates + hashes only) and a
+# .placeholder documenting retrieval; the .bin itself stays local.
+# Listed explicitly rather than via *.bin so a new synthetic test fixture is
+# never silently un-addable on a fresh clone.
 tests/fixtures/arm/stage2_region.bin
+tests/fixtures/arm/capture_bulb_image_region.bin

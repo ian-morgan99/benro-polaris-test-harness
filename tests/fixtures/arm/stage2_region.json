@@ -318,11 +318,17 @@
     "stub_entries_note": "All 42 BL sites resolved from the retained source ELF: 10 via .symtab FUNC entries and 3 via .rel.plt -> .dynsym (sqrt, textdomain, isatty). model is call-site because the intercepted address is the BL instruction inside the mapped blob; the callee bodies are outside the extracted window. Stub grouping is semantic: camera state/capture calls to 'camera', gp_log to 'libgphoto', HI_LOG_Print/sqrt/textdomain/isatty to 'os', timediff_now/delayTime to 'timer', cb_arg_run to 'callback'.",
     "observed_behaviour": {
       "mode": "arm",
-      "instructions_executed": 5001,
-      "result": "timeout",
-      "stub_calls_recorded": 8,
-      "first_stub": "setCameraStatus at 0x101b40",
-      "interpretation": "With load_address set and the 42 call sites registered, execution passes the former instruction-15 fault and reaches real boundary calls. It then loops: the zero-filled globals make a status/timeout test never satisfy its exit condition, so the run hits max_instructions. That is an environment-fidelity limit, not a decoding failure."
+      "instructions_executed": 33,
+      "result": "unsupported_instruction",
+      "error": "Invalid memory write (UC_ERR_WRITE_UNMAPPED)",
+      "fault_address": "0x101b38",
+      "stub_calls_recorded": 2,
+      "stub_calls_seen": {
+        "waitCameraIdle": 1,
+        "numOfCaptureImage": 1
+      },
+      "interpretation": "Measured with the committed sidecar config: load_address 0x101aac, all 42 call sites registered, default stub profile. Execution passes the former instruction-15 fault and reaches two real boundary calls, then faults at 0x101b38 on a store through a pointer derived from a zero-filled global. Control flow that depends on those globals is therefore approximate; this is an environment-fidelity limit, not a decoding failure.",
+      "superseded": "An earlier revision recorded 5001 instructions / timeout / first_stub setCameraStatus. That was measured with an ad-hoc config using a subset of stub entries and a larger mapping, not the committed sidecar, and is superseded by the values above."
     },
     "source_retention_gap": {
       "status": "RESOLVED",

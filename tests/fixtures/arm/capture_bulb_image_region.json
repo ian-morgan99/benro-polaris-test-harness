@@ -1,0 +1,172 @@
+{
+  "name": "capture_bulb_image_region",
+  "description": "captureBulbImage ARM code region: the function that owns the message-driven stop edge and calls capture_image_with_Bulb. The binary is proprietary Benro firmware, never committed, supplied locally (see capture_bulb_image_region.bin.placeholder). This sidecar records only coordinates and hashes - no firmware content.",
+  "source_issue": "ian-morgan99/benro-polaris-firmware-patcher#251",
+  "provenance": {
+    "region_sha256": "9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e",
+    "source_binary_sha256": "8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac",
+    "source_binary_retained_at": "PrivateResearch firmware-packets/6.0.0.54.90--o-v18m-k1ii-pgphoto-readiness-20261029/extracted_appfs/stage2-ondisk/ondisk/pgphoto.stage2ondisk",
+    "symbol": "captureBulbImage",
+    "symbol_vaddr": "0x20604",
+    "size_bytes": 684,
+    "mode": "arm",
+    "firmware_version": "6.0.0.54.90",
+    "patcher_ref": "f344e41/main",
+    "libgphoto2_commit": "63a894b0821a510fc40244c5cc4ef84a5220a91c",
+    "harness_revision_at_pinning": "7287264",
+    "emulator_version": "unicorn-2.1.4",
+    "fixture_stub_profile": "lifecycle",
+    "command": "captureBulbImage",
+    "entry_address": "0x20604",
+    "load_address": "0x20604",
+    "code_address": "0x20000",
+    "code_size": 3145728,
+    "max_instructions": 5000,
+    "layout_note": "Same constraint as stage2_region: the function resolves globals with ldr rN,[pc,#imm] + add rN,pc,rN, so it must load at its original vaddr. code_address/code_size map a page-aligned range covering the blob and its referenced globals (.rodata 0x25cfb0/0x25d070, .dynamic 0x2f6ffc).",
+    "stub_entries": [
+      {
+        "address": "0x20630",
+        "target": "0x1a0d4",
+        "stub_name": "os",
+        "function_name": "getValueWithSeetingsForKey",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20648",
+        "target": "0x1a088",
+        "stub_name": "os",
+        "function_name": "getSettingsValueForKey",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20660",
+        "target": "0x1a0d4",
+        "stub_name": "os",
+        "function_name": "getValueWithSeetingsForKey",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20678",
+        "target": "0x14e7c",
+        "stub_name": "os",
+        "function_name": "pthread_cond_signal",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20690",
+        "target": "0x14d2c",
+        "stub_name": "os",
+        "function_name": "qsort",
+        "model": "call-site"
+      },
+      {
+        "address": "0x206a8",
+        "target": "0x14f0c",
+        "stub_name": "os",
+        "function_name": "textdomain",
+        "model": "call-site"
+      },
+      {
+        "address": "0x206c4",
+        "target": "0x14e7c",
+        "stub_name": "os",
+        "function_name": "pthread_cond_signal",
+        "model": "call-site"
+      },
+      {
+        "address": "0x206e0",
+        "target": "0x101aac",
+        "stub_name": "camera",
+        "function_name": "capture_image_with_Bulb",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20718",
+        "target": "0x14f0c",
+        "stub_name": "os",
+        "function_name": "textdomain",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20744",
+        "target": "0x14f0c",
+        "stub_name": "os",
+        "function_name": "textdomain",
+        "model": "call-site"
+      },
+      {
+        "address": "0x2076c",
+        "target": "0x15380",
+        "stub_name": "os",
+        "function_name": "pthread_getspecific",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20798",
+        "target": "0x15380",
+        "stub_name": "os",
+        "function_name": "pthread_getspecific",
+        "model": "call-site"
+      },
+      {
+        "address": "0x207bc",
+        "target": "0x1c508",
+        "stub_name": "callback",
+        "function_name": "sp_async_thread_function",
+        "model": "call-site"
+      },
+      {
+        "address": "0x207e8",
+        "target": "0x202e4",
+        "stub_name": "camera",
+        "function_name": "stopCaptureImageForMessage",
+        "model": "call-site"
+      },
+      {
+        "address": "0x207f0",
+        "target": "0x2100c",
+        "stub_name": "camera",
+        "function_name": "camera_preview_enable",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20848",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x20850",
+        "target": "0x1ddd4",
+        "stub_name": "camera",
+        "function_name": "checkCameraStatus",
+        "model": "call-site"
+      }
+    ],
+    "stub_entries_note": "All 17 BL sites resolved from the retained source ELF: 9 via .symtab FUNC entries and 8 via .rel.plt -> .dynsym. model is call-site because the intercepted address is the BL inside the mapped blob.",
+    "boundary_aliases": {
+      "stop": "stopCaptureImageForMessage",
+      "message_stop": "stopCaptureImageForMessage"
+    },
+    "boundary_aliases_note": "The lifecycle cases assert on an idealised vocabulary. In this binary the message-driven stop edge is implemented by stopCaptureImageForMessage (0x202e4), called from captureBulbImage at 0x207e8. context_cancel has no counterpart here; gp_context_cancel (0x358d0) is libgphoto-internal with 27 call sites, none in this function.",
+    "observed_behaviour": {
+      "mode": "arm",
+      "instructions_executed": 84,
+      "result": "unsupported_instruction",
+      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED)",
+      "fault_address": "0x20750",
+      "stub_calls_recorded": 10,
+      "stub_calls_seen": [
+        "getValueWithSeetingsForKey",
+        "getSettingsValueForKey",
+        "pthread_cond_signal",
+        "qsort",
+        "textdomain",
+        "capture_image_with_Bulb"
+      ],
+      "interpretation": "Execution reaches 10 real boundary calls including capture_image_with_Bulb, then faults at 0x20750 on ldr r3,[r3]: the preceding ldr r3,[r4,r3] loads a .rodata string address (e.g. 0x25cfb0) and the code dereferences it as a pointer, which only makes sense with the real global contents and a populated caller frame. stopCaptureImageForMessage at 0x207e8 lies beyond that fault, so the stop edge is present in this region but not yet reachable by straight-line execution.",
+      "reachability_gap": "Reaching 0x207e8 needs (a) the referenced .rodata/.data words mapped with their real contents and (b) AAPCS argument setup for captureBulbImage's parameters. Neither is in scope for this fixture; both are recorded here so the gap is explicit rather than silently green."
+    }
+  }
+}

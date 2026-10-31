@@ -57,6 +57,10 @@ class FixtureMetadata:
     # [{"address": int, "stub_name": str, "function_name": str,
     #   "model": "call-site"|"target", "abi_shape": {...}}]
     stub_entries: List[Dict[str, Any]] = field(default_factory=list)
+    # Idealised assertion name -> real symbol name in this region, e.g.
+    # {"stop": "stopCaptureImageForMessage"}. Lets a case written against a
+    # generic vocabulary match the binary's actual boundary names.
+    boundary_aliases: Dict[str, str] = field(default_factory=dict)
 
 
 class FixtureManager:
@@ -90,6 +94,7 @@ class FixtureManager:
             max_instructions = None
             expected_sha256 = None
             stub_entries: List[Dict[str, Any]] = []
+            boundary_aliases: Dict[str, str] = {}
 
             if meta_file.exists():
                 try:
@@ -110,6 +115,13 @@ class FixtureManager:
                     entries = prov.get("stub_entries", [])
                     if isinstance(entries, list):
                         stub_entries = [e for e in entries if isinstance(e, dict)]
+                    aliases = prov.get("boundary_aliases", {})
+                    if isinstance(aliases, dict):
+                        boundary_aliases = {
+                            str(k): str(v)
+                            for k, v in aliases.items()
+                            if isinstance(k, str) and isinstance(v, str)
+                        }
                     recorded = prov.get("region_sha256") or prov.get("sha256")
                     if isinstance(recorded, str) and recorded.strip():
                         expected_sha256 = recorded.strip().lower()
@@ -132,6 +144,7 @@ class FixtureManager:
                 max_instructions=max_instructions,
                 expected_sha256=expected_sha256,
                 stub_entries=stub_entries,
+                boundary_aliases=boundary_aliases,
             )
 
     @staticmethod

@@ -1,0 +1,111 @@
+# capture_bulb_image_region.bin — NOT COMMITTED (proprietary Benro firmware)
+
+This file must **not** be committed to GitHub. It is a raw ARM code region
+extracted from proprietary Benro / Benro Polaris firmware and is retained only
+in the private research repository. Nothing in this repository grants any right
+to redistribute it.
+
+## What this region is
+
+| field | value |
+|---|---|
+| Symbol | `captureBulbImage` |
+| Entry address | `0x20604` |
+| Size | 684 bytes |
+| Mode | arm (ELF flags 0x5000200, Version5 EABI, soft-float ABI) |
+| Region SHA-256 | `9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e` |
+| Source binary | `pgphoto.stage2ondisk` — firmware 6.0.0.54.90, `o-v18m-k1ii-pgphoto-readiness-20261029` |
+| Source binary SHA-256 | `8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac` |
+| Patcher ref | `f344e41/main` |
+| libgphoto2 commit | `63a894b0821a510fc40244c5cc4ef84a5220a91c` |
+| Harness revision | 7287264 (provenance recorded 2026-10-31) |
+| Emulator version | unicorn-2.1.4 |
+| Fixture/stub profile | lifecycle |
+| Command | captureBulbImage |
+
+## Why this region exists
+
+`capture_image_with_Bulb` (the `stage2_region` fixture) does not contain the
+message-driven stop edge that lifecycle cases 1–4 assert on. It was traced in
+the retained source ELF:
+
+- `stopCaptureImageForMessage` (`0x202e4`, 108 bytes) is called from exactly two
+  places: `captureBulbImage` and `sonyBurstEvent`.
+- `gp_camera_stop_timeout` (`0x35158`) has one caller, `gp_camera_exit`.
+- `gp_context_cancel` (`0x358d0`) has 27 call sites, all libgphoto-internal.
+
+`captureBulbImage` is therefore the function that owns the edge, and it also
+calls `capture_image_with_Bulb` at `0x206e0`. Cases 1–4 are re-pointed here via
+`preferred_fixture`.
+
+## Retrieval
+
+The source ELF is retained in the private research repository:
+
+```
+PrivateResearch firmware-packets/6.0.0.54.90--o-v18m-k1ii-pgphoto-readiness-20261029/
+  extracted_appfs/stage2-ondisk/ondisk/pgphoto.stage2ondisk
+```
+
+Extract the region (symbol vaddr `0x20604`, `.text` file offset `0x10604`):
+
+```bash
+dd if=pgphoto.stage2ondisk bs=1 skip=$((0x10604)) count=684 status=none \
+  > tests/fixtures/arm/capture_bulb_image_region.bin
+sha256sum tests/fixtures/arm/capture_bulb_image_region.bin
+# 9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e
+```
+
+The harness refuses to run the fixture if the on-disk bytes do not match the
+SHA-256 recorded in `capture_bulb_image_region.json`.
+
+## Layout
+
+Load at the original vaddr (`load_address: 0x20604`). The function resolves
+globals with `ldr rN, [pc, #imm]` followed by `add rN, pc, rN`, whose literal
+pool words are PC-relative deltas — loading at a relocated base makes those
+loads compute unrelated addresses. `code_address: 0x20000` /
+`code_size: 0x300000` map a page-aligned range covering the blob and its
+referenced globals (`.rodata` `0x25cfb0`, `0x25d070`; `.dynamic` `0x2f6ffc`).
+
+## Call targets
+
+All 17 BL sites resolved from the retained ELF — 9 via `.symtab` FUNC entries,
+8 via `.rel.plt` → `.dynsym`:
+
+| callee | stub group | sites |
+|---|---|---|
+| `textdomain` (PLT) | os | 3 |
+| `getValueWithSeetingsForKey` | os | 2 |
+| `pthread_cond_signal` (PLT) | os | 2 |
+| `pthread_getspecific` (PLT) | os | 2 |
+| `getSettingsValueForKey` | os | 1 |
+| `qsort` (PLT) | os | 1 |
+| `HI_LOG_Print` | os | 1 |
+| `sp_async_thread_function` | callback | 1 |
+| `capture_image_with_Bulb` | camera | 1 |
+| `stopCaptureImageForMessage` | camera | 1 |
+| `camera_preview_enable` | camera | 1 |
+| `checkCameraStatus` | camera | 1 |
+
+Boundary aliases recorded in the sidecar: `stop` and `message_stop` both map to
+`stopCaptureImageForMessage`. There is no counterpart to `context_cancel` or
+`close` in this function.
+
+## Current limitation (recorded, not hidden)
+
+Measured with the committed sidecar config: **84 instructions, 10 boundary
+calls** (including `capture_image_with_Bulb`), then
+`UC_ERR_READ_UNMAPPED` at `0x20750`. The preceding `ldr r3, [r4, r3]` loads a
+`.rodata` string address and the code dereferences it as a pointer, which only
+makes sense with the real global contents and a populated caller frame.
+
+`stopCaptureImageForMessage` is called at `0x207e8`, **beyond** that fault. So
+the stop edge is present in this region but not reachable by straight-line
+execution yet. Closing the gap needs:
+
+1. the referenced `.rodata`/`.data` words mapped with their real contents, and
+2. AAPCS argument setup for `captureBulbImage`'s parameters.
+
+Until then, cases 1–4 report the edge as unreachable rather than absent — see
+the per-case note naming the call site and fault address.

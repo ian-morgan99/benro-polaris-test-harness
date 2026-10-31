@@ -44,7 +44,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .contract import ArmEmulationContract
 from .emulator import ARMEmulator, EmulationConfig, EmulationResult
-from .fixtures import FixtureManager
+from .fixtures import FixtureManager, FixtureMetadata
 from .stubs import (
     StubRegistry,
     create_default_profile,
@@ -82,6 +82,9 @@ class LifecycleTestResult:
     skip_reason: Optional[str] = None
     contract: Optional[ArmEmulationContract] = None
     assertion_errors: List[str] = field(default_factory=list)
+    # Fixture actually executed. Differs from the requested fixture when a case
+    # is re-pointed at the region that owns its edge.
+    fixture_name: Optional[str] = None
 
     def __post_init__(self):
         if self.contract is not None:
@@ -113,11 +116,19 @@ class LifecycleScenario:
         self.emulator_version = emulator_version
         self.stub_registry = StubRegistry()
         self._setup_stubs()
+        # Populated in run() once the fixture is resolved.
+        self._active_fixture: Optional[FixtureMetadata] = None
+        self._boundary_aliases: Dict[str, str] = {}
 
     # Boundary function names this case's assertions depend on. A fixture whose
     # sidecar declares none of them cannot exercise the case, and that is a
     # fixture/case mismatch rather than a behavioural failure.
     expected_boundary_functions: tuple = ()
+
+    # Region that actually owns this case's edge, when it differs from the suite
+    # default. Used when the pinned function under test does not contain the
+    # boundary the case asserts on.
+    preferred_fixture: Optional[str] = None
 
     def _setup_stubs(self) -> None:
         """Set up stubs for this scenario. Override in subclasses."""
@@ -190,6 +201,98 @@ class LifecycleScenario:
 
         return emulator
 
+    def _resolve_fixture_name(self) -> str:
+        """Choose the fixture this case should actually run against.
+
+        A case whose asserted edge is absent from the requested fixture but
+        present in its ``preferred_fixture`` is re-pointed there. Anything else
+        keeps the requested fixture, so behaviour is unchanged for cases that
+        already match.
+
+        Returns:
+            Fixture name to execute
+        """
+        if not self.preferred_fixture or self.preferred_fixture == self.fixture_name:
+            return self.fixture_name
+        candidate = self.fixture_manager.get_fixture(self.preferred_fixture)
+        if candidate is None or not candidate.path.exists():
+            return self.fixture_name
+        declared = {e.get("function_name") for e in candidate.stub_entries}
+        aliases = candidate.boundary_aliases
+        owns = any(
+            name in declared or aliases.get(name) in declared
+            for name in self.expected_boundary_functions
+        )
+        return self.preferred_fixture if owns else self.fixture_name
+
+    def _boundary_matches(self, recorded: Any, expected: str) -> bool:
+        """Whether a recorded stub call satisfies an asserted boundary name.
+
+        Matches the idealised name directly, or the real symbol it aliases to in
+        this fixture (e.g. ``stop`` matches ``stopCaptureImageForMessage``).
+
+        Args:
+            recorded: function_name recorded for the stub call
+            expected: name the case asserts on
+
+        Returns:
+            True when the call satisfies the assertion
+        """
+        if recorded == expected:
+            return True
+        alias = self._boundary_aliases.get(expected)
+        return bool(alias is not None and alias == recorded)
+
+    def _declares_boundary(self, fixture: Any, expected: str) -> bool:
+        """Whether a fixture's sidecar declares the asserted boundary.
+
+        Args:
+            fixture: FixtureMetadata to inspect
+            expected: name the case asserts on
+
+        Returns:
+            True when the region contains that boundary or its alias
+        """
+        declared = {e.get("function_name") for e in fixture.stub_entries}
+        aliases = fixture.boundary_aliases
+        real = aliases.get(expected)
+        return bool(expected in declared or (real is not None and real in declared))
+
+    def _unreachable_note(self, contract: ArmEmulationContract,
+                          expected: str) -> Optional[str]:
+        """Explain why a declared boundary was not observed, when possible.
+
+        When the run faulted before the boundary's call site, the absence is a
+        reachability limit rather than evidence that the edge is missing or
+        broken. Returns None when no such explanation applies.
+
+        Args:
+            contract: emulation result to inspect
+            expected: asserted boundary name
+
+        Returns:
+            Explanatory string, or None
+        """
+        fixture = self._active_fixture
+        fault = contract.unsupported_instruction_address
+        if fixture is None or fault is None:
+            return None
+        real = self._boundary_aliases.get(expected, expected)
+        for entry in fixture.stub_entries:
+            if entry.get("function_name") not in (expected, real):
+                continue
+            addr = FixtureManager._coerce_int(entry.get("address"))
+            if addr is None or addr > fault:
+                shown = hex(addr) if addr is not None else "?"
+                return (
+                    f"{expected}: call site at {shown} lies beyond the run's "
+                    f"fault at {hex(fault)}, so this edge is present in the "
+                    f"region but not reachable by straight-line execution. Needs "
+                    f"real global contents and AAPCS argument setup for the "
+                    f"entry function."
+                )
+        return None
+
     def _assertions(self, contract: ArmEmulationContract) -> List[str]:
         """Run assertions on the contract result. Override in subclasses.
 
@@ -219,6 +322,13 @@ class LifecycleScenario:
         Returns:
             LifecycleTestResult
         """
+        # Re-point at the region that actually owns this case's edge when the
+        # requested one does not contain it. Cases 1-4 assert on a stop/close
+        # edge that capture_image_with_Bulb does not expose but its caller
+        # captureBulbImage does, so running them against stage2_region can only
+        # ever produce "not observed".
+        self.fixture_name = self._resolve_fixture_name()
+
         # SKIP if using the tiny synthetic fixture — it cannot produce
         # camera/libgphoto/timer/callback events. Only real Stage-2 fixtures
         # can exercise the lifecycle paths.
@@ -244,11 +354,14 @@ class LifecycleScenario:
                 skipped=True,
                 skip_reason=(
                     f"fixture binary not available locally: {self.fixture_name}; "
-                    "extract pgphoto.stage2ondisk capture_image_with_Bulb region "
-                    "from the private research repo and place it at "
-                    "tests/fixtures/arm/stage2_region.bin"
+                    "extract the region recorded in "
+                    f"tests/fixtures/arm/{self.fixture_name}.json from the "
+                    "private research repo and place the bytes at "
+                    f"tests/fixtures/arm/{self.fixture_name}.bin"
                 ),
             )
+        self._active_fixture = fixture
+        self._boundary_aliases = dict(fixture.boundary_aliases)
 
         # SKIP when the fixture declares no stub entries. Every lifecycle case
         # asserts on boundary events (stop/close/cancel/timer/callback), and
@@ -294,16 +407,44 @@ class LifecycleScenario:
         }
         missing = [
             name for name in self.expected_boundary_functions
-            if name not in declared
+            if not self._declares_boundary(fixture, name)
         ]
         if missing:
-            assertion_errors.insert(0, (
-                f"fixture {self.fixture_name} declares no boundary named "
-                f"{', '.join(sorted(missing))}; this case cannot be evaluated "
-                f"against this artifact. Declared boundaries: "
-                f"{', '.join(sorted(n for n in declared if n)) or '(none)'}. "
-                f"Pin the region that owns these edges instead."
-            ))
+            # Distinguish a total mismatch (no asserted edge present at all) from
+            # a partial one. Saying "cannot be evaluated" when the case's
+            # primary edge *is* present would overstate the problem and send the
+            # reader off to pin yet another region.
+            present = [
+                name for name in self.expected_boundary_functions
+                if self._declares_boundary(fixture, name)
+            ]
+            listed = ", ".join(sorted(missing))
+            declared_list = ", ".join(sorted(n for n in declared if n)) or "(none)"
+            if present:
+                assertion_errors.append(
+                    f"fixture {self.fixture_name} owns {', '.join(sorted(present))} "
+                    f"but declares no boundary named {listed}; the assertions on "
+                    f"{listed} cannot be satisfied by this artifact. Declared "
+                    f"boundaries: {declared_list}."
+                )
+            else:
+                assertion_errors.insert(0, (
+                    f"fixture {self.fixture_name} declares no boundary named "
+                    f"{listed}; this case cannot be evaluated against this "
+                    f"artifact. Declared boundaries: {declared_list}. Pin the "
+                    f"region that owns these edges instead."
+                ))
+        else:
+            # The edge is declared but may not have been reached. Distinguish
+            # "not present" from "present but unreachable" so a fault short of
+            # the call site is not mistaken for missing behaviour.
+            for name in self.expected_boundary_functions:
+                calls = [c for c in contract.stub_calls
+                         if self._boundary_matches(c.get("function_name"), name)]
+                if not calls:
+                    note = self._unreachable_note(contract, name)
+                    if note is not None:
+                        assertion_errors.append(note)
 
         passed = contract.is_pass() and len(assertion_errors) == 0
 
@@ -312,6 +453,7 @@ class LifecycleScenario:
             passed=passed,
             contract=contract,
             assertion_errors=assertion_errors,
+            fixture_name=self.fixture_name,
         )
 
 
@@ -323,6 +465,7 @@ class Case1NormalBulbCompletion(LifecycleScenario):
     """Normal held-Bulb completion with exactly one stop/close."""
 
     expected_boundary_functions = ("stop", "close")
+    preferred_fixture = "capture_bulb_image_region"
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -347,8 +490,8 @@ class Case1NormalBulbCompletion(LifecycleScenario):
 
         # Exactly one stop and one close
         camera_calls = contract.stub_calls
-        stop_calls = [c for c in camera_calls if c["stub_name"] == "camera" and c["function_name"] == "stop"]
-        close_calls = [c for c in camera_calls if c["stub_name"] == "camera" and c["function_name"] == "close"]
+        stop_calls = [c for c in camera_calls if c["stub_name"] == "camera" and self._boundary_matches(c["function_name"], "stop")]
+        close_calls = [c for c in camera_calls if c["stub_name"] == "camera" and self._boundary_matches(c["function_name"], "close")]
 
         if len(stop_calls) != 1:
             errors.append(f"Expected exactly 1 stop call, got {len(stop_calls)}")
@@ -356,7 +499,7 @@ class Case1NormalBulbCompletion(LifecycleScenario):
             errors.append(f"Expected exactly 1 close call, got {len(close_calls)}")
 
         # Normal completion must NOT take the cancel path
-        cancel_calls = [c for c in camera_calls if c["function_name"] in ("cancel", "context_cancel")]
+        cancel_calls = [c for c in camera_calls if self._boundary_matches(c["function_name"], "cancel") or self._boundary_matches(c["function_name"], "context_cancel")]
         if len(cancel_calls) > 0:
             errors.append(f"Normal completion must not take cancel path, got {len(cancel_calls)} cancel calls")
 
@@ -371,6 +514,7 @@ class Case2MessageStopVsContextCancel(LifecycleScenario):
     """Explicit message-stop and context-cancel as distinct routes."""
 
     expected_boundary_functions = ("message_stop", "context_cancel")
+    preferred_fixture = "capture_bulb_image_region"
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -393,8 +537,8 @@ class Case2MessageStopVsContextCancel(LifecycleScenario):
         errors = super()._assertions(contract)
 
         camera_calls = contract.stub_calls
-        message_stop = [c for c in camera_calls if c["function_name"] == "message_stop"]
-        context_cancel = [c for c in camera_calls if c["function_name"] == "context_cancel"]
+        message_stop = [c for c in camera_calls if self._boundary_matches(c["function_name"], "message_stop")]
+        context_cancel = [c for c in camera_calls if self._boundary_matches(c["function_name"], "context_cancel")]
 
         # Both routes must be distinguishable (not conflated)
         if len(message_stop) == 0 and len(context_cancel) == 0:
@@ -416,6 +560,7 @@ class Case3CancelResultSurvivesStop(LifecycleScenario):
     """Cancellation result surviving a successful stop callback."""
 
     expected_boundary_functions = ("stop", "cancel")
+    preferred_fixture = "capture_bulb_image_region"
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -441,12 +586,12 @@ class Case3CancelResultSurvivesStop(LifecycleScenario):
         errors = super()._assertions(contract)
 
         # Stop must have been called and succeeded
-        stop_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera" and c["function_name"] == "stop"]
+        stop_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera" and self._boundary_matches(c["function_name"], "stop")]
         if len(stop_calls) == 0:
             errors.append("Stop callback was not invoked")
 
         # Cancel result must be preserved (not masked by successful stop)
-        cancel_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera" and c["function_name"] == "cancel"]
+        cancel_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera" and self._boundary_matches(c["function_name"], "cancel")]
         if len(cancel_calls) == 0:
             errors.append("Cancel was not invoked - result may have been lost")
 
@@ -461,6 +606,7 @@ class Case4StopFailurePreservesPrimaryError(LifecycleScenario):
     """Stop failure preserving the correct primary error without masking it."""
 
     expected_boundary_functions = ("stop",)
+    preferred_fixture = "capture_bulb_image_region"
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -478,7 +624,7 @@ class Case4StopFailurePreservesPrimaryError(LifecycleScenario):
         errors = super()._assertions(contract)
 
         # Stop failure must be observable as the primary error
-        stop_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera" and c["function_name"] == "stop"]
+        stop_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera" and self._boundary_matches(c["function_name"], "stop")]
         if len(stop_calls) == 0:
             errors.append("Stop was not invoked")
 

@@ -48,6 +48,16 @@ STAGE2_REGION_SHA256 = (
     "23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3"
 )
 
+# Pinned provenance for the captureBulbImage region. This is the function that
+# owns the message-driven stop edge asserted on by lifecycle cases 1-4; it calls
+# both stopCaptureImageForMessage and capture_image_with_Bulb. Proprietary, like
+# stage2_region, and never committed.
+CBI_REL_PATH = "tests/fixtures/arm/capture_bulb_image_region.bin"
+CBI_REGION_SHA256 = (
+    "9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e"
+)
+CBI_SIZE = 684
+
 # Minimal ARM (A32) encoders for synthetic fixtures.
 ARM_MOV = lambda rd, imm: 0xE3A00000 | ((rd & 15) << 12) | (imm & 0xFF)
 BX_LR = 0xE12FFF1E
@@ -237,6 +247,175 @@ class TestFixtureIntegrity:
         assert not manager.verify_fixture("tiny_fixture", "0" * 64)
         # Correct SHA should pass
         assert manager.verify_fixture("tiny_fixture", fixture.sha256)
+
+    def test_capture_bulb_region_is_gitignored(self):
+        """The second proprietary region must also be covered by .gitignore."""
+        import subprocess
+
+        res = subprocess.run(
+            ["git", "check-ignore", "-q", CBI_REL_PATH],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert res.returncode == 0, f"{CBI_REL_PATH} must be matched by .gitignore"
+
+    def test_capture_bulb_region_not_tracked_by_git(self):
+        """The second proprietary region must never become a tracked artifact."""
+        import subprocess
+
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", CBI_REL_PATH],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert tracked.returncode != 0, (
+            f"{CBI_REL_PATH} is tracked by git and must not be"
+        )
+
+    def test_capture_bulb_region_placeholder_documents_provenance(self):
+        """Placeholder must record coordinates, hash and retrieval command."""
+        placeholder = FIXTURES_DIR / "capture_bulb_image_region.bin.placeholder"
+        assert placeholder.exists(), "captureBulbImage placeholder missing"
+        content = placeholder.read_text()
+        lowered = content.lower()
+        for needle in (CBI_REGION_SHA256, "0x20604", str(CBI_SIZE),
+                       "pgphoto.stage2ondisk"):
+            assert needle in content, f"placeholder missing {needle!r}"
+        assert "not be committed" in lowered or "not committed" in lowered, (
+            "placeholder must state the blob is never committed"
+        )
+
+    def test_capture_bulb_region_local_hash_matches_provenance(self):
+        """A locally supplied blob must match the pinned SHA-256 exactly."""
+        bin_path = FIXTURES_DIR / "capture_bulb_image_region.bin"
+        if not bin_path.exists():
+            pytest.skip("capture_bulb_image_region.bin not supplied locally")
+        sha256 = hashlib.sha256(bin_path.read_bytes()).hexdigest()
+        assert sha256 == CBI_REGION_SHA256, (
+            f"local capture_bulb_image_region.bin hash {sha256} does not match "
+            f"pinned provenance {CBI_REGION_SHA256}"
+        )
+        assert bin_path.stat().st_size == CBI_SIZE
+
+    def test_capture_bulb_region_declares_stop_owner(self):
+        """Sidecar must record the stop edge this region owns, with its alias.
+
+        Cases 1-4 assert on an idealised 'stop'/'message_stop' name. The real
+        symbol is stopCaptureImageForMessage, so the sidecar has to carry both
+        the call site and the alias or those cases can never match.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("capture_bulb_image_region")
+        if fixture is None:
+            pytest.skip("capture_bulb_image_region.bin not supplied locally")
+
+        declared = {e.get("function_name") for e in fixture.stub_entries}
+        assert "stopCaptureImageForMessage" in declared, (
+            "region must declare its stopCaptureImageForMessage call site"
+        )
+        assert "capture_image_with_Bulb" in declared, (
+            "region must declare the capture_image_with_Bulb call site it owns"
+        )
+        assert fixture.boundary_aliases.get("stop") == "stopCaptureImageForMessage"
+        assert fixture.boundary_aliases.get(
+            "message_stop") == "stopCaptureImageForMessage"
+
+    def test_capture_bulb_region_reaches_boundary_calls(self):
+        """Region must execute real ARM code and reach boundary calls.
+
+        Pins the current measured behaviour: 84 instructions, 10 stub calls,
+        then an unmapped read at 0x20750. The stop call site sits beyond that
+        fault, so this asserts progress without pretending the edge works.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("capture_bulb_image_region")
+        if fixture is None:
+            pytest.skip("capture_bulb_image_region.bin not supplied locally")
+
+        config = manager.to_emulation_config(
+            "capture_bulb_image_region",
+            patcher_commit="f344e41",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            stub_profile="lifecycle",
+            command="captureBulbImage",
+        )
+        assert config.mode == "arm"
+        assert config.load_address == 0x20604
+
+        emulator = ARMEmulator(config)
+        emulator.apply_stub_profile(create_default_profile())
+        for entry in fixture.stub_entries:
+            emulator.register_stub_entry(
+                entry["stub_name"],
+                int(entry["address"], 0),
+                function_name=entry["function_name"],
+                model=entry.get("model", "call-site"),
+            )
+        result = emulator.run()
+
+        assert result.instructions_executed == 84
+        assert len(result.stub_calls) == 10
+        called = {c.function_name for c in result.stub_calls}
+        assert "capture_image_with_Bulb" in called, (
+            "the region's own capture call must be observed as a boundary event"
+        )
+        assert result.result != EmulationResult.PASS
+        assert result.unsupported_instruction_address == 0x20750
+
+        # Deterministic across runs.
+        again = ARMEmulator(config)
+        again.apply_stub_profile(create_default_profile())
+        for entry in fixture.stub_entries:
+            again.register_stub_entry(
+                entry["stub_name"], int(entry["address"], 0),
+                function_name=entry["function_name"],
+                model=entry.get("model", "call-site"))
+        second = again.run()
+        assert second.instructions_executed == result.instructions_executed
+        assert len(second.stub_calls) == len(result.stub_calls)
+
+    def test_stage2_sidecar_observed_behaviour_is_current(self):
+        """stage2_region's recorded behaviour must match a real run.
+
+        Guards against the earlier drift where the sidecar described an ad-hoc
+        probe (5001 instructions / timeout) instead of what the committed
+        config actually produces.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("stage2_region")
+        if fixture is None:
+            pytest.skip("stage2_region.bin not supplied locally")
+
+        recorded = fixture.provenance.get("observed_behaviour", {})
+        assert recorded.get("instructions_executed") == 33
+        assert recorded.get("stub_calls_recorded") == 2
+        assert recorded.get("fault_address") == "0x101b38"
+        assert "superseded" in recorded, (
+            "the stale 5001-instruction measurement must be marked superseded"
+        )
+
+        config = manager.to_emulation_config(
+            "stage2_region",
+            patcher_commit="f344e41",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            stub_profile="lifecycle",
+            command="capture_image_with_Bulb",
+        )
+        emulator = ARMEmulator(config)
+        emulator.apply_stub_profile(create_default_profile())
+        for entry in fixture.stub_entries:
+            emulator.register_stub_entry(
+                entry["stub_name"], int(entry["address"], 0),
+                function_name=entry["function_name"],
+                model=entry.get("model", "call-site"))
+        result = emulator.run()
+
+        assert result.instructions_executed == recorded["instructions_executed"]
+        assert len(result.stub_calls) == recorded["stub_calls_recorded"]
 
     def test_stub_call_fixture_exists(self):
         """Stub-call fixture binary must exist."""
@@ -1459,6 +1638,82 @@ class TestLifecycleScenarios:
         assert len(results) == 9
         for case in LifecycleCase:
             assert case in results, f"Missing result for {case}"
+
+    def test_stop_edge_cases_repoint_to_owning_region(self):
+        """Cases 1-4 must run against the region that owns the stop edge.
+
+        capture_image_with_Bulb does not call stop/close/cancel at all, so
+        running these cases against stage2_region can only ever report "not
+        observed" - which reads as a patcher regression. captureBulbImage owns
+        stopCaptureImageForMessage, so they are re-pointed there.
+        """
+        cbi = self.manager.get_fixture("capture_bulb_image_region")
+        if cbi is None:
+            pytest.skip(
+                "capture_bulb_image_region.bin not supplied locally (private research)"
+            )
+
+        from polaris_harness.arm_emulator.lifecycle import (
+            Case1NormalBulbCompletion,
+            Case2MessageStopVsContextCancel,
+            Case3CancelResultSurvivesStop,
+            Case4StopFailurePreservesPrimaryError,
+        )
+
+        for cls, case in (
+            (Case1NormalBulbCompletion, LifecycleCase.CASE_1_NORMAL_BULB_COMPLETION),
+            (Case2MessageStopVsContextCancel,
+             LifecycleCase.CASE_2_MESSAGE_STOP_VS_CONTEXT_CANCEL),
+            (Case3CancelResultSurvivesStop,
+             LifecycleCase.CASE_3_CANCEL_RESULT_SURVIVES_STOP),
+            (Case4StopFailurePreservesPrimaryError,
+             LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR),
+        ):
+            scenario = cls(
+                case,
+                self.manager,
+                patcher_commit="test",
+                harness_revision="0.1.0",
+                emulator_version="unicorn-2.1.4",
+            )
+            result = scenario.run()
+            assert result.fixture_name == "capture_bulb_image_region", (
+                f"{cls.__name__} ran against {result.fixture_name!r}, expected the "
+                f"region that owns stopCaptureImageForMessage"
+            )
+
+    def test_stop_edge_note_distinguishes_unreachable_from_absent(self):
+        """A declared-but-unreached edge must be reported as unreachable.
+
+        The stop call site sits beyond the run's fault address. Saying "stop was
+        not invoked" without that context implies the behaviour is missing, when
+        it is present in the region and simply not reachable yet.
+        """
+        cbi = self.manager.get_fixture("capture_bulb_image_region")
+        if cbi is None:
+            pytest.skip(
+                "capture_bulb_image_region.bin not supplied locally (private research)"
+            )
+
+        from polaris_harness.arm_emulator.lifecycle import (
+            Case4StopFailurePreservesPrimaryError,
+        )
+
+        scenario = Case4StopFailurePreservesPrimaryError(
+            LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR,
+            self.manager,
+            patcher_commit="test",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+        )
+        result = scenario.run()
+
+        notes = " ".join(result.assertion_errors)
+        assert "beyond the run's fault" in notes, (
+            "expected a reachability note naming the call site and fault address; "
+            f"got: {notes!r}"
+        )
+        assert "0x207e8" in notes, "note must name the stopCaptureImageForMessage site"
 
     def test_case_1_normal_bulb_completion(self):
         """Case 1: Normal held-Bulb completion with exactly one stop/close."""

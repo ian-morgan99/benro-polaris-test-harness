@@ -369,7 +369,11 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
                 continue
             all_skipped = False
             status = "PASS" if result.passed else "FAIL"
-            print(f"  {case.value}: {status}")
+            # Show which region the case actually ran against: cases 1-4 are
+            # re-pointed to the fixture that owns their edge, and without this
+            # the reader cannot tell which artifact produced the result.
+            shown = f" [{result.fixture_name}]" if result.fixture_name else ""
+            print(f"  {case.value}: {status}{shown}")
             if not result.passed:
                 all_passed = False
                 any_real_failure = True
