@@ -5,6 +5,15 @@ Deterministic protocol/runtime test harness for the Benro Polaris ecosystem.
 For step-by-step usage, including simulation controls and image upload, see the
 [user guide](USER-GUIDE.md).
 
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0-only).
+See the [LICENSE](LICENSE) file for details.
+
+The `src/polaris_harness/arm_emulator/` component (ARM user-space emulation for
+Stage-2 lifecycle tests, issue #15) is also GPL-3.0-only, as it depends on the
+Unicorn CPU emulator framework which is GPL-licensed.
+
 This repository exists because repeated physical testing has shown that a visible camera failure can originate at several different layers:
 
 ```text

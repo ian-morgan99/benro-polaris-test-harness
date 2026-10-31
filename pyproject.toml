@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Deterministic protocol/runtime test harness for Benro Polaris ecosystem"
 readme = "README.md"
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-only"}
 authors = [
     {name = "Ian Morgan", email = "github@morgan-multinational.co.uk"}
 ]
@@ -16,7 +16,7 @@ keywords = ["test", "harness", "protocol", "firmware", "polaris", "benro"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Testing",
