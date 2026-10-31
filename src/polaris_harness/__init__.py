@@ -101,6 +101,22 @@ from .ledger import (
     remove_ledger,
     stop_all as stop_all_ledgers,
 )
+from .arm_emulator import (
+    ARMEmulator,
+    EmulationConfig,
+    EmulationResult,
+    EmulationResultRecord,
+    StubRegistry,
+    StubProfile,
+    FixtureManager,
+    FixtureMetadata,
+    ArmEmulationContract,
+    ContractVersion,
+    LifecycleCase,
+    LifecycleScenario,
+    LifecycleTestResult,
+    run_all_lifecycle_cases,
+)
 
 # Global stop function for backward compatibility
 def stop_all():
@@ -200,4 +216,19 @@ __all__ = [
     "RUNTIME_MANIFEST_SCHEMA_VERSION",
     "PROTOCOL_HARNESS_VERSION",
     "RUNTIME_VERIFIER_VERSION",
+    # ARM emulation (issue #15)
+    "ARMEmulator",
+    "EmulationConfig",
+    "EmulationResult",
+    "EmulationResultRecord",
+    "StubRegistry",
+    "StubProfile",
+    "FixtureManager",
+    "FixtureMetadata",
+    "ArmEmulationContract",
+    "ContractVersion",
+    "LifecycleCase",
+    "LifecycleScenario",
+    "LifecycleTestResult",
+    "run_all_lifecycle_cases",
 ]

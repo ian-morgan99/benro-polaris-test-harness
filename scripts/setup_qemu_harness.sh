@@ -1,5 +1,18 @@
 #!/bin/bash
 # setup_qemu_harness.sh - Setup QEMU harness for Polaris Harness testing
+#
+# DEPRECATED - Do not use. This script is deprecated per issue #15.
+#
+# This script used privileged QEMU setup with host networking/bridge/iptables
+# changes, which violates the issue #15 constraints:
+#   - No privileged QEMU setup
+#   - No host networking/bridge/iptables changes
+#   - No implicit system package installation
+#
+# Use `polaris-harness arm-emulate --suite` instead, which uses the Unicorn
+# Python ARM emulator in user space without elevated privileges.
+#
+# See docs/ARM_EMULATION.md for details.
 
 set -e
 

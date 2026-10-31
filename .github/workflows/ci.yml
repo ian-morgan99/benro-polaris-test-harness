@@ -107,6 +107,44 @@ jobs:
           coverage.xml
         retention-days: 7
 
+  arm-emulation:
+    name: ARM Emulation (Issue #15)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+
+    - name: Run ARM lifecycle suite
+      run: |
+        # Missing emulator support is a hard failure, not a silent skip
+        polaris-harness arm-emulate --suite
+
+    - name: Verify tiny fixture end-to-end
+      run: |
+        polaris-harness arm-emulate \
+          --fixture tiny_fixture \
+          --output /tmp/arm-result.json \
+          --command capture_image_with_Bulb
+        python -c "
+        import json, sys
+        with open('/tmp/arm-result.json') as f:
+            result = json.load(f)
+        assert result['result'] == 'pass', f'Expected pass, got {result[\"result\"]}'
+        assert result['instructions_executed'] > 0, 'No instructions executed'
+        print(f'Tiny fixture: {result[\"instructions_executed\"]} instructions executed, result={result[\"result\"]}')
+        "
+
   schema-validation:
     name: Schema Validation
     runs-on: ubuntu-latest

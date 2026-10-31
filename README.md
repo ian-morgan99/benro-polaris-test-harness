@@ -39,7 +39,86 @@ It should provide:
 - fault injection for known runtime and protocol failures;
 - a filesystem/runtime harness for Polaris `/app` path, loader, ABI and provenance checks;
 - executable regression scenarios that OpenPolaris and the firmware patcher can call from CI;
-- a durable evidence ledger showing exactly which physical observation each emulated behaviour came from.
+- a durable evidence ledger showing exactly which physical observation each emulated behaviour came from;
+- ARM user-space emulation for Stage-2/`pgphoto` executable lifecycle tests (issue #15),
+  using the Unicorn CPU emulator in user space without elevated privileges.
+
+## ARM Emulation (Issue #15) — Agent Usage Guide
+
+The ARM user-space emulation component lives in `src/polaris_harness/arm_emulator/` and is an **independent harness component** — it does not depend on the Polaris protocol scenario engine, runtime verifier, or transport layer.
+
+### What it provides
+
+- `ARMEmulator` — Unicorn-based ARM Thumb CPU emulation with fail-closed hooks
+- `StubRegistry` / `StubProfile` — ABI stubs for camera, libgphoto, OS, timer, callback boundaries
+- `FixtureManager` — Checked-in ARM fixture binaries with SHA-256 integrity verification
+- `ArmEmulationContract` — Machine-readable JSON invocation/result contract
+- 9 lifecycle test scenarios (issue #15, cases 1–9) for Stage-2 `capture_image_with_Bulb`
+- CLI: `polaris-harness arm-emulate --suite` or `--fixture <name>`
+
+### How other agents should use it
+
+**Do not** import from `polaris_harness.engine`, `polaris_harness.runtime`, or `polaris_harness.transport` inside `arm_emulator/`. Keep the boundary strict.
+
+**Do** use the public API exported from `polaris_harness.arm_emulator`:
+
+```python
+from polaris_harness.arm_emulator import (
+    ARMEmulator,
+    EmulationConfig,
+    FixtureManager,
+    ArmEmulationContract,
+    run_all_lifecycle_cases,
+    LifecycleCase,
+)
+
+# Run all 9 lifecycle cases
+fixture_manager = FixtureManager("tests/fixtures/arm")
+results = run_all_lifecycle_cases(
+    fixture_manager,
+    patcher_commit="<sha>",
+    harness_revision="0.1.0",
+    emulator_version="unicorn-2.1.4",
+)
+for case, result in results.items():
+    assert result.passed, f"{case} failed: {result.assertion_errors}"
+
+# Emulate a single fixture
+config = EmulationConfig(
+    binary_path=Path("tests/fixtures/arm/tiny_fixture.bin"),
+    binary_sha256="<sha256>",
+    patcher_commit="<sha>",
+    harness_revision="0.1.0",
+    emulator_version="unicorn-2.1.4",
+    fixture_stub_profile="default",
+    command="capture_image_with_Bulb",
+)
+emulator = ARMEmulator(config)
+result_record = emulator.run()
+contract = ArmEmulationContract.from_emulation_result(result_record)
+assert contract.is_pass()
+```
+
+### Sample prompt for testing new fixes
+
+When asking another agent to test a fix to the ARM emulation component, provide this prompt:
+
+> I've made a change to the ARM user-space emulation component in `src/polaris_harness/arm_emulator/`. Please:
+>
+> 1. Run the full ARM emulator test suite: `python -m pytest tests/test_arm_emulator.py -v`
+> 2. Run the ARM lifecycle suite via CLI: `polaris-harness arm-emulate --suite`
+> 3. Verify the tiny fixture executes end-to-end: `polaris-harness arm-emulate --fixture tiny_fixture --output /tmp/result.json` and confirm the JSON contract shows `result: "pass"` and `instructions_executed > 0`
+> 4. Run the complete test suite to check for regressions: `python -m pytest tests/ -v`
+> 5. Confirm no imports from `polaris_harness.engine`, `polaris_harness.runtime`, or `polaris_harness.transport` exist inside `src/polaris_harness/arm_emulator/`
+> 6. Report any failures with the full error output
+
+### Key constraints (from issue #15)
+
+- **Fail closed**: unknown binary hashes, unexpected syscalls, unsupported instructions, missing stubs, timeouts → error result
+- **Never mutate** the input artifact
+- **Bind every run** to binary SHA-256, patcher commit, harness revision, emulator version, stub profile, command
+- **No privileged QEMU**, no host networking/bridge/iptables
+- **Independent component** — no coupling to protocol engine or runtime verifier
 
 ## What this project is NOT
 

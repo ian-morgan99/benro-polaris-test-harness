@@ -11,6 +11,13 @@ import sys
 from pathlib import Path
 
 from .version import __version__
+from .arm_emulator import (
+    ARMEmulator,
+    EmulationResult,
+    FixtureManager,
+    run_all_lifecycle_cases,
+)
+from .arm_emulator.contract import ArmEmulationContract
 
 
 def validate_command(args: argparse.Namespace) -> int:
@@ -67,6 +74,92 @@ def trace_ingest_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def arm_emulate_command(args: argparse.Namespace) -> int:
+    """Run ARM emulation for Stage-2 lifecycle tests.
+
+    This is an independent component (issue #15) that does not couple to the
+    Polaris protocol scenario engine or runtime verifier.
+    """
+    fixtures_dir = Path(args.fixtures_dir) if args.fixtures_dir else None
+    fixture_manager = FixtureManager(fixtures_dir) if fixtures_dir else FixtureManager(
+        Path(__file__).parent.parent.parent / "tests" / "fixtures" / "arm"
+    )
+
+    if args.suite:
+        # Run all 9 lifecycle cases
+        print("Running ARM lifecycle suite (issue #15)...")
+        results = run_all_lifecycle_cases(
+            fixture_manager,
+            patcher_commit=args.patcher_commit or "unknown",
+            harness_revision=args.harness_revision or "0.1.0",
+            emulator_version=args.emulator_version or "unknown",
+        )
+
+        all_passed = True
+        for case, result in results.items():
+            status = "PASS" if result.passed else "FAIL"
+            print(f"  {case.value}: {status}")
+            if not result.passed:
+                all_passed = False
+                for err in result.assertion_errors:
+                    print(f"    - {err}")
+                if result.contract and not result.contract.is_pass():
+                    print(f"    result: {result.contract.result}")
+                    print(f"    exit_code: {result.contract.exit_code}")
+                    print(f"    error: {result.contract.error_message}")
+
+        if all_passed:
+            print("✓ All ARM lifecycle cases passed")
+            return 0
+        else:
+            print("✗ Some ARM lifecycle cases failed")
+            return 3
+
+    elif args.fixture:
+        # Run a single fixture emulation
+        fixture = fixture_manager.get_fixture(args.fixture)
+        if fixture is None:
+            print(f"✗ Fixture not found: {args.fixture}")
+            return 2
+
+        from .arm_emulator import EmulationConfig
+
+        config = EmulationConfig(
+            binary_path=fixture.path,
+            binary_sha256=fixture.sha256,
+            patcher_commit=args.patcher_commit or "unknown",
+            harness_revision=args.harness_revision or "0.1.0",
+            emulator_version=args.emulator_version or "unknown",
+            fixture_stub_profile=args.stub_profile or "default",
+            command=args.command or "capture_image_with_Bulb",
+            entry_address=args.entry_address or 0x1000,
+        )
+
+        emulator = ARMEmulator(config)
+        result_record = emulator.run()
+        contract = ArmEmulationContract.from_emulation_result(result_record)
+
+        output_path = Path(args.output) if args.output else None
+        if output_path:
+            contract.write_to_file(output_path)
+            print(f"✓ Contract written to {output_path}")
+        else:
+            print(contract.to_json())
+
+        if contract.is_pass():
+            print("✓ ARM emulation passed")
+            return 0
+        else:
+            print(f"✗ ARM emulation failed: {contract.result}")
+            if contract.error_message:
+                print(f"  Error: {contract.error_message}")
+            return 3
+
+    else:
+        print("✗ Must specify either --suite or --fixture")
+        return 2
+
+
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -82,6 +175,8 @@ Examples:
   polaris-harness runtime verify --root /path/to/firmware --manifest manifest.yaml
   polaris-harness runtime report --root /path/to/firmware --manifest manifest.yaml --json report.json
   polaris-harness trace ingest --input trace.pcap --output scenarios/
+  polaris-harness arm-emulate --suite
+  polaris-harness arm-emulate --fixture tiny_fixture --output result.json
 
 Exit codes:
   0  success / contract satisfied
@@ -156,6 +251,48 @@ Exit codes:
     trace_ingest_parser.add_argument("--input", required=True, help="Input trace file")
     trace_ingest_parser.add_argument("--output", required=True, help="Output directory")
     trace_ingest_parser.set_defaults(func=trace_ingest_command)
+
+    # ARM emulate command (issue #15 - independent component)
+    arm_emulate_parser = subparsers.add_parser(
+        "arm-emulate", help="Run ARM user-space emulation for Stage-2 lifecycle tests"
+    )
+    arm_emulate_parser.add_argument(
+        "--suite", action="store_true", help="Run all 9 #251 lifecycle test cases"
+    )
+    arm_emulate_parser.add_argument(
+        "--fixture", help="Fixture name to emulate (e.g. tiny_fixture)"
+    )
+    arm_emulate_parser.add_argument(
+        "--fixtures-dir", help="Directory containing fixture binaries"
+    )
+    arm_emulate_parser.add_argument(
+        "--command", default="capture_image_with_Bulb",
+        help="Command being emulated (default: capture_image_with_Bulb)"
+    )
+    arm_emulate_parser.add_argument(
+        "--stub-profile", default="default",
+        help="Stub profile name (default: default)"
+    )
+    arm_emulate_parser.add_argument(
+        "--entry-address", type=lambda x: int(x, 0), default=0x1000,
+        help="Entry point address (default: 0x1000)"
+    )
+    arm_emulate_parser.add_argument(
+        "--patcher-commit", default="unknown",
+        help="Patcher commit SHA (default: unknown)"
+    )
+    arm_emulate_parser.add_argument(
+        "--harness-revision", default="0.1.0",
+        help="Harness revision (default: 0.1.0)"
+    )
+    arm_emulate_parser.add_argument(
+        "--emulator-version", default="unknown",
+        help="Emulator version (default: unknown)"
+    )
+    arm_emulate_parser.add_argument(
+        "--output", help="Output JSON contract file path"
+    )
+    arm_emulate_parser.set_defaults(func=arm_emulate_command)
 
     # Parse arguments
     args = parser.parse_args()

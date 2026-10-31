@@ -1,0 +1,42 @@
+# Stage-2 / pgphoto binary region for issue #251
+
+This directory holds the provenance-pinned ARM binary region needed by
+issue #15 (ARM user-space emulation for executable Stage-2 lifecycle tests)
+and consumed by patcher issue #251.
+
+## Status
+
+**PLACEHOLDER** — The actual binary region from the v90-era `capture_image_with_Bulb`
+capture lifecycle has not yet been checked in. This file documents the expected
+provenance fields that must accompany it when available.
+
+## Expected provenance
+
+When the real binary region is available, it must include:
+
+| Field | Value |
+|-------|-------|
+| Source issue | ian-morgan99/benro-polaris-firmware-patcher#251 |
+| Binary SHA-256 | TBD — compute with `sha256sum stage2_region.bin` |
+| Patcher commit | TBD |
+| Harness revision | TBD |
+| Emulator version | TBD (Unicorn version) |
+| Fixture/stub profile | TBD |
+| Command | TBD |
+
+## How to add the real binary
+
+1. Obtain the exact ARM binary or extracted code region from the v90-era
+   `capture_image_with_Bulb` capture lifecycle (owned by patcher issue #251).
+2. Place it as `stage2_region.bin` in this directory.
+3. Record its SHA-256: `sha256sum stage2_region.bin`
+4. Update this README with the provenance fields above.
+5. Add a test in `tests/test_arm_emulator.py` that loads and replays this
+   region with explicit ABI stubs.
+
+## Constraints (from issue #15)
+
+- Never patch or mutate the input artifact.
+- Bind every run to input binary SHA-256, patcher commit, harness revision,
+  emulator version, fixture/stub profile, command, and full machine-readable result.
+- Fail closed on unknown binary hashes/layouts.

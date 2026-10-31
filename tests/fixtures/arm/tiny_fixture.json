@@ -1,0 +1,15 @@
+{
+  "description": "Tiny ARM Thumb fixture: MOV R0, #1; BX LR. Proves the emulator executes instructions end-to-end.",
+  "source_issue": "ian-morgan99/benro-polaris-test-harness#15",
+  "provenance": {
+    "type": "synthetic",
+    "architecture": "ARM Thumb",
+    "instructions": [
+      {"mnemonic": "MOV R0, #1", "encoding": "0x2001"},
+      {"mnemonic": "BX LR", "encoding": "0x4770"}
+    ],
+    "entry_address": 4096,
+    "expected_registers": {"R0": 1},
+    "expected_exit_code": 0
+  }
+}
