@@ -22,11 +22,15 @@ repository. This placeholder documents how to obtain it locally.
 | Size | 2176 bytes |
 | Mode | arm (ELF flags 0x5000200, Version5 EABI, soft-float ABI) |
 | Binary SHA-256 | 23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3 |
-| Patcher commit | TBD |
-| Harness revision | TBD |
-| Emulator version | TBD (Unicorn version) |
-| Fixture/stub profile | TBD |
-| Command | TBD |
+| Patcher commit | 8c015c0a73c8affea8fa723badcceb4070ef81b4 |
+| Harness revision | 9e7afdc (provenance recorded 2026-10-31) |
+| Emulator version | unicorn-2.1.4 |
+| Fixture/stub profile | lifecycle (camera/libgphoto/os/timer/callback, per-boundary `abi_shape`) |
+| Command | capture_image_with_Bulb |
+
+These fields describe our own toolchain and the extraction coordinates; they
+contain no firmware content. Re-verify them against the revisions actually used
+for a given run before treating a contract as authoritative.
 
 ## Retrieval procedure (private research repo only)
 

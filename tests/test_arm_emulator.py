@@ -405,6 +405,388 @@ class TestAAPCSMarshaling:
         )
 
 
+class TestFailurePathProvenance:
+    """Failure records must report the mode and work actually performed (#21).
+
+    A failing run is the record a gate has to trust, so it cannot be allowed to
+    fall back to the dataclass defaults (mode="thumb", instructions_executed=0).
+    """
+
+    def setup_method(self):
+        self.fixture_path = FIXTURES_DIR / "arm_mode_fixture.bin"
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def _config(self, **overrides):
+        params = dict(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="failure_provenance",
+            mode="arm",
+            entry_address=4096,
+        )
+        params.update(overrides)
+        return EmulationConfig(**params)
+
+    def test_faulting_arm_run_reports_arm_mode(self):
+        """A run that faults in ARM mode must report mode='arm', not 'thumb'."""
+        # MOV R0,#0 ; MOV PC,R0 -> branches to unmapped address 0 and faults.
+        fault = FIXTURES_DIR.parent / "arm" / "_fault_probe.bin"
+        import struct
+        fault.write_bytes(struct.pack("<2I", 0xE3A00000, 0xE12FFF11))
+        try:
+            config = self._config(binary_path=fault,
+                                  binary_sha256=hashlib.sha256(
+                                      fault.read_bytes()).hexdigest())
+            result = ARMEmulator(config).run()
+        finally:
+            fault.unlink(missing_ok=True)
+
+        assert result.result != EmulationResult.PASS, "fixture should fault"
+        assert result.mode == "arm", (
+            f"Failure record reported mode={result.mode!r}; must report the "
+            f"requested 'arm' (issue #21)"
+        )
+
+    def test_faulting_run_reports_instructions_executed(self):
+        """A faulting run must report the instructions it really executed."""
+        import struct
+        fault = FIXTURES_DIR / "_fault_count_probe.bin"
+        fault.write_bytes(struct.pack("<2I", 0xE3A00000, 0xE12FFF11))
+        try:
+            config = self._config(binary_path=fault,
+                                  binary_sha256=hashlib.sha256(
+                                      fault.read_bytes()).hexdigest())
+            emulator = ARMEmulator(config)
+            result = emulator.run()
+        finally:
+            fault.unlink(missing_ok=True)
+
+        assert result.result != EmulationResult.PASS
+        assert result.instructions_executed == emulator._instruction_count, (
+            f"Contract reported {result.instructions_executed} but the engine "
+            f"executed {emulator._instruction_count} (issue #21)"
+        )
+        assert result.instructions_executed > 0
+
+    def test_timeout_reports_real_instruction_count(self):
+        """The instruction-limit path must report the real count, not 0."""
+        import struct
+        loop = FIXTURES_DIR / "_timeout_count_probe.bin"
+        # B . (branch to self)
+        loop.write_bytes(struct.pack("<I", 0xEAFFFFFE))
+        try:
+            config = self._config(binary_path=loop,
+                                  binary_sha256=hashlib.sha256(
+                                      loop.read_bytes()).hexdigest(),
+                                  max_instructions=20)
+            result = ARMEmulator(config).run()
+        finally:
+            loop.unlink(missing_ok=True)
+
+        assert result.result == EmulationResult.TIMEOUT
+        assert result.instructions_executed > 0, (
+            "Timeout record reported 0 instructions executed (issue #21)"
+        )
+
+    def test_failure_record_carries_stub_calls(self):
+        """Stub calls made before a fault must still appear in the record."""
+        import struct
+        # 0x1000 MOV R0,#1
+        # 0x1004 BL 0x1010 (LR=0x1008)   <- call site, intercepted
+        # 0x1008 MOV PC,R0               <- faults: R0=1 is unmapped
+        # 0x100C BX LR
+        # 0x1010 BX LR                   <- stub body
+        code = FIXTURES_DIR / "_stub_then_fault.bin"
+        code.write_bytes(struct.pack(
+            "<5I", 0xE3A00001, 0xEB000001, 0xE12FFF11, 0xE12FFF1E, 0xE12FFF1E))
+        try:
+            config = self._config(binary_path=code,
+                                  binary_sha256=hashlib.sha256(
+                                      code.read_bytes()).hexdigest())
+            emulator = ARMEmulator(config)
+            emulator.register_stub("camera", lambda fn, a, r: 0)
+            emulator.register_stub_entry("camera", 0x1004,
+                                         function_name="stop")
+            result = emulator.run()
+        finally:
+            code.unlink(missing_ok=True)
+
+        assert len(result.stub_calls) == 1, (
+            f"Stub calls lost on the failure path: {len(result.stub_calls)} "
+            f"(issue #21)"
+        )
+        assert result.stub_calls[0].function_name == "stop"
+
+
+class TestStubEntryModels:
+    """Call-site vs PLT-target interception must both be correct (#22)."""
+
+    def setup_method(self):
+        import struct
+        # 0x1000 MOV R0,#0x11
+        # 0x1004 MOV R1,#0x22
+        # 0x1008 BL 0x1010          (return address 0x100C)
+        # 0x100C MOV R2,#0x33       <- correct resume point
+        # 0x1010 BX LR              <- PLT-style stub body
+        self.fixture_path = FIXTURES_DIR / "_entry_models.bin"
+        self.fixture_path.write_bytes(struct.pack(
+            "<6I", 0xE3A00011, 0xE3A01022, 0xEB000000,
+            0xE3A02033, 0xE12FFF1E, 0xE3A03044))
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def teardown_method(self):
+        self.fixture_path.unlink(missing_ok=True)
+
+    def _config(self):
+        return EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="entry_models",
+            mode="arm",
+            entry_address=4096,
+            code_size=0x1000,
+            max_instructions=50,
+        )
+
+    def test_call_site_model_resumes_after_branch(self):
+        """Intercepting the BL itself resumes at the following instruction."""
+        emulator = ARMEmulator(self._config())
+        emulator.register_stub("camera", lambda fn, a, r: 0x5A)
+        emulator.register_stub_entry("camera", 0x1008,
+                                     function_name="stop",
+                                     model="call-site")
+        result = emulator.run()
+
+        assert result.final_registers.get("R2") == 0x33, (
+            "call-site interception did not resume at call site + size"
+        )
+        assert result.final_registers.get("R3") != 0x44
+
+    def test_target_model_returns_via_link_register(self):
+        """Intercepting the callee must return to the caller via LR (#22)."""
+        emulator = ARMEmulator(self._config())
+        emulator.register_stub("camera", lambda fn, a, r: 0x5A)
+        emulator.register_stub_entry("camera", 0x1010,
+                                     function_name="stop",
+                                     model="target")
+        result = emulator.run()
+
+        # LR holds 0x100C (the instruction after the BL), so R2 must be set.
+        assert result.final_registers.get("R2") == 0x33, (
+            "target interception fell through into the stub body instead of "
+            "returning via LR (issue #22)"
+        )
+        assert result.final_registers.get("R3") != 0x44
+
+    def test_semantic_function_name_recorded(self):
+        """Calls must carry their declared identity, not a flat label (#22)."""
+        emulator = ARMEmulator(self._config())
+        emulator.register_stub("camera", lambda fn, a, r: 0)
+        emulator.register_stub_entry("camera", 0x1008, function_name="close")
+        result = emulator.run()
+
+        assert len(result.stub_calls) == 1
+        assert result.stub_calls[0].function_name == "close", (
+            f"Expected 'close', got {result.stub_calls[0].function_name!r} "
+            f"(issue #22: lifecycle assertions filter on this field)"
+        )
+
+    def test_distinct_entries_for_one_stub(self):
+        """One stub may expose several identities at different addresses."""
+        import struct
+        # 0x1000 MOV R0,#1
+        # 0x1004 BL 0x1030 (LR=0x1008)   -> stop body, returns to 0x1008
+        # 0x1008 BL 0x1034 (LR=0x100C)   -> close body, returns to 0x100C
+        # until = entry + len(binary) = 0x100C, so the second return ends the run.
+        code = FIXTURES_DIR / "_multi_entry.bin"
+        code.write_bytes(struct.pack("<3I", 0xE3A00001, 0xEB000009, 0xEB000009))
+        sha = hashlib.sha256(code.read_bytes()).hexdigest()
+        try:
+            config = EmulationConfig(
+                binary_path=code, binary_sha256=sha,
+                patcher_commit="t", harness_revision="0.1.0",
+                emulator_version="unicorn-2.1.4",
+                fixture_stub_profile="default", command="multi",
+                mode="arm", entry_address=4096, code_size=0x1000,
+                max_instructions=50)
+            emulator = ARMEmulator(config)
+            emulator.register_stub("camera", lambda fn, a, r: 0)
+            # Two distinct callee bodies for the same stub, each with its own
+            # semantic identity. Target model: control returns via LR.
+            emulator.register_stub_entry("camera", 0x1030,
+                                         function_name="stop",
+                                         model="target")
+            emulator.register_stub_entry("camera", 0x1034,
+                                         function_name="close",
+                                         model="target")
+            result = emulator.run()
+        finally:
+            code.unlink(missing_ok=True)
+
+        names = [c.function_name for c in result.stub_calls]
+        assert names[:2] == ["stop", "close"], (
+            f"Expected distinct identities per entry, got {names}"
+        )
+        assert len(names) == 2, (
+            f"Execution should terminate after both calls, got {len(names)} calls "
+            f"(run looped: {names})"
+        )
+
+    def test_unknown_model_rejected(self):
+        """An unknown interception model must fail closed."""
+        emulator = ARMEmulator(self._config())
+        emulator.register_stub("camera", lambda fn, a, r: 0)
+        with pytest.raises(ValueError, match="Invalid stub entry model"):
+            emulator.register_stub_entry("camera", 0x1010, model="bogus")
+
+
+class TestAbiShapeMarshaling:
+    """StubProfile.abi_shape must actually drive marshaling (#22)."""
+
+    def setup_method(self):
+        import struct
+        self.fixture_path = FIXTURES_DIR / "_abi_shape.bin"
+        self.fixture_path.write_bytes(struct.pack("<4I", 0xE3A00011, 0xE3A01022,
+                                                  0xEB000000, 0xE12FFF1E))
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def teardown_method(self):
+        self.fixture_path.unlink(missing_ok=True)
+
+    def _config(self):
+        return EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="abi_test",
+            command="abi_shape",
+            mode="arm",
+            entry_address=4096,
+            code_size=0x1000,
+            max_instructions=50,
+        )
+
+    def test_profile_abi_shape_is_consumed(self):
+        """A profile declaring arg_count>4 must attempt to read stack words."""
+        profile = StubProfile(
+            name="abi",
+            camera_stub=lambda fn, a, r: 0,
+            abi_shape={"camera": {"arg_count": 6, "pointer_args": [],
+                                  "deref_bytes": {}}},
+        )
+        emulator = ARMEmulator(self._config())
+        emulator.apply_stub_profile(profile)
+        emulator.register_stub_entry("camera", 0x1008, function_name="stop")
+        result = emulator.run()
+
+        # SP points just past the mapped stack region, so words past R3 are
+        # unreadable: the declared shape must surface as a fail-closed error
+        # rather than silently recording four arguments.
+        assert result.result in (EmulationResult.ERROR, EmulationResult.MISSING_STUB), (
+            f"arg_count=6 over unmapped memory should fail closed, got "
+            f"{result.result}: {result.error_message}"
+        )
+        assert "unmapped" in (result.error_message or "").lower(), (
+            f"Expected an unmapped-memory reason, got {result.error_message!r}"
+        )
+
+    def test_pointer_argument_dereferenced(self):
+        """A declared pointer argument must be read from emulated memory."""
+        import struct
+        # 0x1000 LDR R0,[PC,#8] -> PC reads as 0x1008, so this loads the word
+        #                        at 0x1010, which holds the pointer 0x1020.
+        # 0x1004 BL <stub>      -> intercepted at the call site, resume 0x1008
+        # 0x1008 BX LR          -> LR = entry + len(binary) = 0x1024 == until
+        # 0x1010 .word 0x1020   -> pointer value (mapped)
+        # 0x1020 .word 0xCAFEBABE -> the bytes the stub should actually receive
+        code = FIXTURES_DIR / "_ptr_arg.bin"
+        buf = bytearray(0x24)
+        struct.pack_into("<I", buf, 0x00, 0xE59F0008)   # LDR R0,[PC,#8]
+        struct.pack_into("<I", buf, 0x04, 0xEB000000)   # BL (intercepted here)
+        struct.pack_into("<I", buf, 0x08, 0xE12FFF1E)   # BX LR
+        struct.pack_into("<I", buf, 0x10, 0x00001020)   # pointer value
+        struct.pack_into("<I", buf, 0x20, 0xCAFEBABE)   # pointed-to content
+        code.write_bytes(bytes(buf))
+        sha = hashlib.sha256(code.read_bytes()).hexdigest()
+        seen = {}
+
+        def stub(fn, args, regs):
+            seen["args"] = list(args)
+            return 0
+        try:
+            config = EmulationConfig(
+                binary_path=code, binary_sha256=sha, patcher_commit="t",
+                harness_revision="0.1.0", emulator_version="unicorn-2.1.4",
+                fixture_stub_profile="ptr", command="ptr", mode="arm",
+                entry_address=4096, code_size=0x1000, max_instructions=50)
+            emulator = ARMEmulator(config)
+            emulator.register_stub("camera", stub)
+            emulator.set_stub_abi_shape(
+                "camera", {"arg_count": 4, "pointer_args": [0],
+                           "deref_bytes": {0: 4}})
+            emulator.register_stub_entry("camera", 0x1004,
+                                         function_name="stop",
+                                         model="call-site")
+            result = emulator.run()
+        finally:
+            code.unlink(missing_ok=True)
+
+        assert result.result == EmulationResult.PASS, (
+            f"Run should succeed: {result.result} {result.error_message}"
+        )
+        assert "args" in seen, "stub was not called"
+        # Without dereference the stub would see the raw pointer 0x1020.
+        assert seen["args"][0] == 0xCAFEBABE, (
+            f"Expected dereferenced content 0xCAFEBABE, got "
+            f"{seen['args'][0]:#x} - pointer was not followed (issue #22)"
+        )
+
+    def test_unreadable_pointer_fails_closed(self):
+        """A pointer argument into unmapped memory must not pass silently."""
+        import struct
+        # R0 = 0x11, which is not mapped: dereferencing it must fail closed.
+        code = FIXTURES_DIR / "_ptr_fail.bin"
+        buf = bytearray(0x24)
+        struct.pack_into("<I", buf, 0x00, 0xE3A00011)   # MOV R0,#0x11
+        struct.pack_into("<I", buf, 0x04, 0xEB000000)   # BL (intercepted here)
+        struct.pack_into("<I", buf, 0x08, 0xE12FFF1E)   # BX LR
+        code.write_bytes(bytes(buf))
+        sha = hashlib.sha256(code.read_bytes()).hexdigest()
+        try:
+            config = EmulationConfig(
+                binary_path=code, binary_sha256=sha, patcher_commit="t",
+                harness_revision="0.1.0", emulator_version="unicorn-2.1.4",
+                fixture_stub_profile="ptr", command="ptr", mode="arm",
+                entry_address=4096, code_size=0x1000, max_instructions=50)
+            emulator = ARMEmulator(config)
+            emulator.register_stub("camera", lambda fn, a, r: 0)
+            emulator.set_stub_abi_shape(
+                "camera", {"arg_count": 4, "pointer_args": [0],
+                           "deref_bytes": {0: 4}})
+            emulator.register_stub_entry("camera", 0x1004,
+                                         function_name="stop",
+                                         model="call-site")
+            result = emulator.run()
+        finally:
+            code.unlink(missing_ok=True)
+
+        assert result.result in (
+            EmulationResult.ERROR, EmulationResult.MISSING_STUB), (
+            f"Unreadable pointer should fail closed, got {result.result}"
+        )
+        assert "unmapped" in (result.error_message or "").lower()
+
+
 class TestFixtureManager:
     """Test FixtureManager functionality."""
 

@@ -134,7 +134,11 @@ class ARMEmulator:
         self._arm_const: Any = None
         self._stub_registry: Dict[str, Callable] = {}
         self._stub_call_records: List[StubCallRecord] = []
-        self._stub_entry_addresses: Dict[str, int] = {}
+        # address -> {"stub_name", "function_name", "abi_shape", "model"}
+        # Keyed by address so one stub can expose several distinct entry points
+        # (e.g. camera.stop and camera.close) with different identities.
+        self._stub_entries: Dict[int, Dict[str, Any]] = {}
+        self._stub_abi_shapes: Dict[str, Dict[str, Any]] = {}
         self._instruction_count = 0
         self._max_instructions = config.max_instructions
         self._instruction_limit_exceeded = False
@@ -161,21 +165,93 @@ class ARMEmulator:
         self._stub_registry[name] = handler
         self._logger.debug("Registered stub: %s", name)
 
-    def register_stub_entry(self, stub_name: str, address: int) -> None:
+    def apply_stub_profile(self, profile: Any) -> None:
+        """Apply a StubProfile: register its handlers and per-boundary ABI shapes.
+
+        The profile's ``abi_shape`` maps stub name -> {"arg_count": N,
+        "pointer_args": [indices], "deref_bytes": {index: byte_count}}. Without
+        this the marshaling layer cannot read arguments past R3 or follow
+        pointer arguments into emulated memory.
+
+        Args:
+            profile: A StubProfile instance
+        """
+        for attr, stub_name in (
+            ("camera_stub", "camera"),
+            ("libgphoto_stub", "libgphoto"),
+            ("os_stub", "os"),
+            ("timer_stub", "timer"),
+            ("callback_stub", "callback"),
+        ):
+            handler = getattr(profile, attr, None)
+            if handler is not None:
+                self.register_stub(stub_name, handler)
+
+        for stub_name, shape in (getattr(profile, "abi_shape", {}) or {}).items():
+            self._stub_abi_shapes[stub_name] = dict(shape)
+            self._logger.debug("ABI shape for %s: %s", stub_name, shape)
+
+    def set_stub_abi_shape(self, stub_name: str, abi_shape: Dict[str, Any]) -> None:
+        """Declare the ABI shape for one stub boundary.
+
+        Args:
+            stub_name: Stub identifier
+            abi_shape: {"arg_count": int, "pointer_args": [int], "deref_bytes": {int: int}}
+        """
+        self._stub_abi_shapes[stub_name] = dict(abi_shape)
+
+    def register_stub_entry(self, stub_name: str, address: int,
+                            function_name: Optional[str] = None,
+                            abi_shape: Optional[Dict[str, Any]] = None,
+                            model: str = "call-site") -> None:
         """Register a stub entry address for AAPCS marshaling.
 
-        When execution reaches this address, the emulator reads R0-R3 (plus
-        stack words past R3 per the profile's ABI shape) and passes them as
-        arguments to the stub. The stub's return value is written back to R0.
+        Two interception models are supported and must be chosen explicitly:
+
+        ``model="call-site"`` (default)
+            ``address`` is the **branch instruction that calls the stub** (the
+            ``BL``/``BLX`` itself). The emulator dispatches the stub there and
+            resumes at the next instruction, which is exactly where AAPCS says
+            control returns. Use this when the fixture places a call in the code
+            region.
+
+        ``model="target"``
+            ``address`` is the **callee** - the PLT-style stub body the branch
+            jumps to. This is how real position-independent binaries resolve
+            external calls. The emulator dispatches the stub and returns to the
+            caller by writing ``LR`` back to ``PC``, honouring ARM/Thumb
+            interworking. Registering a target under the old call-site behaviour
+            would fall through into the instruction after the stub body.
 
         Args:
             stub_name: Stub identifier (must match a registered stub)
-            address: Entry address where the stub is invoked
+            address: Address to intercept, per the chosen model
+            function_name: Semantic identity recorded for calls at this entry
+                (e.g. ``"stop"``, ``"close"``, ``"cancel"``). Defaults to
+                ``"aapcs_call"`` for backwards compatibility; lifecycle
+                assertions need a real name.
+            abi_shape: Per-entry ABI shape, overriding the profile-level shape
+            model: ``"call-site"`` or ``"target"``
+
+        Raises:
+            KeyError: If the stub is not registered
+            ValueError: If ``model`` is unknown (fail closed)
         """
         if stub_name not in self._stub_registry:
             raise KeyError(f"Cannot register entry for unregistered stub: {stub_name}")
-        self._stub_entry_addresses[stub_name] = address
-        self._logger.debug("Registered stub entry: %s @ 0x%08x", stub_name, address)
+        if model not in ("call-site", "target"):
+            raise ValueError(
+                f"Invalid stub entry model: {model!r}. "
+                f"Expected 'call-site' or 'target'."
+            )
+        self._stub_entries[address] = {
+            "stub_name": stub_name,
+            "function_name": function_name or "aapcs_call",
+            "abi_shape": dict(abi_shape) if abi_shape else None,
+            "model": model,
+        }
+        self._logger.debug("Registered stub entry: %s.%s @ 0x%08x (%s)",
+                           stub_name, function_name or "aapcs_call", address, model)
 
     def _call_stub(self, stub_name: str, function_name: str, arguments: List[Any],
                    register_snapshot: Dict[str, int]) -> Any:
@@ -259,27 +335,58 @@ class ARMEmulator:
             self._logger.error("Instruction limit exceeded: %d", self._instruction_count)
             uc.emu_stop()
 
-        # AAPCS stub marshaling: if we've reached a stub entry address,
-        # read R0-R3 (+ stack per ABI shape), call the stub, write return
-        # value to R0, and skip past the call instruction.
-        for stub_name, entry_addr in self._stub_entry_addresses.items():
-            if address == entry_addr:
-                self._marshal_stub_call(uc, stub_name)
-                # Skip past the call instruction (BL/BLX is 4 bytes in ARM, 2 in Thumb)
-                instr_size = 2 if self._mode == "thumb" else 4
-                pc = uc.reg_read(self._arm_const.UC_ARM_REG_PC)
-                uc.reg_write(self._arm_const.UC_ARM_REG_PC, pc + instr_size)
-                return
+        # AAPCS stub marshaling: if we've reached a stub entry address, marshal
+        # arguments per the declared ABI shape, dispatch the stub, write the
+        # return value to R0, and resume according to the entry's model.
+        entry = self._stub_entries.get(address)
+        if entry is not None:
+            self._marshal_stub_call(uc, entry["stub_name"], entry)
+            if entry["model"] == "target":
+                # The intercepted address is the callee (PLT-style stub body).
+                # Return to the caller via LR, preserving bit 0 so ARM/Thumb
+                # interworking is honoured.
+                lr = uc.reg_read(self._arm_const.UC_ARM_REG_LR)
+                uc.reg_write(self._arm_const.UC_ARM_REG_PC, lr)
+            else:
+                # The intercepted address is the BL/BLX itself: resume at the
+                # following instruction, which is where AAPCS says it returns.
+                uc.reg_write(self._arm_const.UC_ARM_REG_PC, address + size)
+            return
 
-    def _marshal_stub_call(self, uc, stub_name: str) -> None:
+    def _resolve_abi_shape(self, stub_name: str,
+                           entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Resolve the ABI shape for a stub call.
+
+        Precedence: per-entry override, then profile-level shape for the stub,
+        then the four-register default. Never silently invents a shape beyond
+        the documented AAPCS default.
+
+        Args:
+            stub_name: Stub identifier
+            entry: Stub entry descriptor, if any
+
+        Returns:
+            Resolved ABI shape dictionary
+        """
+        if entry is not None and entry.get("abi_shape"):
+            return dict(entry["abi_shape"])
+        profile_shape = self._stub_abi_shapes.get(stub_name)
+        if profile_shape:
+            return dict(profile_shape)
+        return {"arg_count": 4, "pointer_args": [], "deref_bytes": {}}
+
+    def _marshal_stub_call(self, uc, stub_name: str,
+                           entry: Optional[Dict[str, Any]] = None) -> None:
         """Marshal AAPCS arguments and call a stub.
 
-        Reads R0-R3 (plus stack words past R3 per ABI shape), calls the stub,
-        writes the return value back to R0.
+        Reads R0-R3 (plus stack words past R3 per ABI shape), dereferences any
+        declared pointer arguments, calls the stub with its semantic function
+        name, and writes the return value back to R0.
 
         Args:
             uc: Unicorn engine instance
             stub_name: Stub identifier
+            entry: Stub entry descriptor from ``self._stub_entries``
 
         Raises:
             KeyError: If stub is not registered (fail closed)
@@ -287,6 +394,8 @@ class ARMEmulator:
         """
         if stub_name not in self._stub_registry:
             raise KeyError(f"Missing stub: {stub_name}")
+
+        function_name = entry["function_name"] if entry else "aapcs_call"
 
         # Read caller-saved argument registers R0-R3
         arg_regs = ["R0", "R1", "R2", "R3"]
@@ -296,14 +405,7 @@ class ARMEmulator:
             if const is not None:
                 arguments.append(uc.reg_read(const))
 
-        # Apply ABI shape from stub profile if available
-        abi_shape: Dict[str, Any] = {}
-        try:
-            from .stubs import StubProfile
-            # We need access to the profile; for now use default arg_count=4
-            abi_shape = {"arg_count": 4, "pointer_args": [], "deref_bytes": {}}
-        except ImportError:
-            abi_shape = {"arg_count": 4, "pointer_args": [], "deref_bytes": {}}
+        abi_shape = self._resolve_abi_shape(stub_name, entry)
 
         arg_count: int = abi_shape.get("arg_count", 4)
         pointer_args: List[int] = abi_shape.get("pointer_args", [])
@@ -339,9 +441,10 @@ class ARMEmulator:
         # Read register snapshot before the call
         register_snapshot = self._read_registers()
 
-        # Call the stub
+        # Call the stub under its semantic identity so lifecycle assertions can
+        # distinguish stop/close/cancel/timer/callback calls.
         handler = self._stub_registry[stub_name]
-        return_value = handler("aapcs_call", arguments, register_snapshot)
+        return_value = handler(function_name, arguments, register_snapshot)
 
         # Write return value back to R0
         uc.reg_write(self._arm_const.UC_ARM_REG_R0, return_value)
@@ -349,15 +452,15 @@ class ARMEmulator:
         # Record the stub call
         record = StubCallRecord(
             stub_name=stub_name,
-            function_name="aapcs_call",
+            function_name=function_name,
             arguments=list(arguments),
             return_value=return_value,
             timestamp_ms=int(time.time() * 1000) - (self._start_time_ms or 0),
             register_snapshot=register_snapshot,
         )
         self._stub_call_records.append(record)
-        self._logger.debug("AAPCS stub call: %s(%s) -> %s",
-                           stub_name, arguments, return_value)
+        self._logger.debug("AAPCS stub call: %s.%s(%s) -> %s",
+                           stub_name, function_name, arguments, return_value)
 
     def _hook_invalid_instruction(self, uc, address: int, size: int, user_data) -> None:
         """Unicorn invalid instruction hook - fail closed on unsupported instructions.
@@ -499,6 +602,10 @@ class ARMEmulator:
         import time
         self._start_time_ms = int(time.time() * 1000)
 
+        # Provenance fields are set at construction, not only on the success
+        # path: a failing run must report the mode it actually ran in and how
+        # many instructions it actually executed (issue #21). The dataclass
+        # defaults would otherwise silently claim "thumb"/0 on an ARM run.
         result = EmulationResultRecord(
             binary_sha256=self.config.binary_sha256,
             patcher_commit=self.config.patcher_commit,
@@ -510,6 +617,7 @@ class ARMEmulator:
             exit_code=-1,
             duration_ms=0,
             instructions_executed=0,
+            mode=self._mode,
         )
 
         try:
@@ -534,9 +642,7 @@ class ARMEmulator:
 
             # Read final register state
             result.final_registers = self._read_registers()
-            result.instructions_executed = self._instruction_count
             result.stub_calls = self._stub_call_records
-            result.mode = self._mode
 
             # Determine result
             if self._instruction_limit_exceeded:
@@ -589,5 +695,21 @@ class ARMEmulator:
         finally:
             end_time_ms = int(time.time() * 1000)
             result.duration_ms = end_time_ms - (self._start_time_ms or end_time_ms)
+
+            # Record execution facts on every path, including failures. Without
+            # this a faulting run reports instructions_executed=0 and empty
+            # stub_calls/registers even though the engine did work, which makes
+            # the failing record - the one a gate must trust - misleading.
+            result.mode = self._mode
+            result.instructions_executed = self._instruction_count
+            if not result.stub_calls:
+                result.stub_calls = list(self._stub_call_records)
+            if not result.final_registers and self._uc is not None:
+                # Best effort: registers may be unreadable if the engine died
+                # before any instruction ran.
+                try:
+                    result.final_registers = self._read_registers()
+                except Exception:  # pylint: disable=broad-except
+                    pass
 
         return result

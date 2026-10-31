@@ -51,13 +51,66 @@ elevated privileges, and no host networking changes.
 
 Key properties:
 
-- **ARM Thumb mode** execution
+- **ARM and Thumb mode** execution — `mode="arm"` or `mode="thumb"`. An unknown
+  value is rejected at construction. The mode a run actually used is recorded in
+  the contract on every path, including failures.
 - **Instruction tracing** — every executed instruction is counted
 - **Fail-closed hooks** — unsupported instructions, unexpected syscalls, missing
   stubs, and instruction limits all cause emulation to stop with an error result
 - **Read-only input** — the binary is never patched or mutated
 - **SHA-256 binding** — the input binary hash is computed before emulation and
   recorded in the result
+- **Truthful failure records** — `mode`, `instructions_executed`, `stub_calls`
+  and best-effort `final_registers` are populated on failure paths too, so a
+  faulting run cannot report the defaults (`mode="thumb"`,
+  `instructions_executed=0`) when it actually ran ARM and executed instructions.
+  A failing record is the one a gate has to trust.
+
+### Stub entry interception
+
+`register_stub_entry(stub_name, address, function_name=None, abi_shape=None,
+model="call-site")` intercepts execution at `address`, marshals AAPCS arguments,
+dispatches the stub, writes the return value to `R0`, and resumes according to
+`model`:
+
+| `model` | `address` is | Resume point |
+|---|---|---|
+| `"call-site"` (default) | the `BL`/`BLX` instruction itself | the following instruction (`address + size`) |
+| `"target"` | the callee — a PLT-style stub body the branch jumps to | the caller, via `LR` (honours ARM/Thumb interworking) |
+
+Real position-independent binaries resolve external calls through PLT-style
+targets, so `model="target"` is what real code needs. Registering a target under
+call-site behaviour resumes inside the stub body instead of returning to the
+caller. An unknown `model` raises `ValueError`.
+
+`function_name` gives each entry a semantic identity (`"stop"`, `"close"`,
+`"cancel"`, …) recorded in `stub_calls`. It defaults to `"aapcs_call"` for
+compatibility, but lifecycle assertions filter on the real name, so entries used
+by lifecycle cases must declare one. One stub may expose several identities at
+different addresses.
+
+### ABI shape
+
+`StubProfile.abi_shape` maps stub name to a per-boundary signature and is
+consumed by marshaling:
+
+```python
+StubProfile(
+    name="lifecycle",
+    camera_stub=camera_handler,
+    abi_shape={
+        "camera": {
+            "arg_count": 6,          # words past R3 are read from the stack
+            "pointer_args": [0],     # argument indices to dereference
+            "deref_bytes": {0: 4},   # bytes to read at each pointer
+        },
+    },
+)
+```
+
+Precedence is per-entry `abi_shape`, then the profile-level shape for that stub,
+then the four-register default. A declared stack word or pointer that points at
+unmapped memory raises rather than recording a partial argument list.
 
 ### Stubs
 
@@ -90,9 +143,15 @@ binding:
 - `exit_code` — process exit code
 - `duration_ms` — emulation duration
 - `instructions_executed` — number of instructions executed
+- `mode` — the instruction mode the run actually used (`arm` or `thumb`)
 - `stub_calls` — all recorded stub invocations
 - `final_registers` — final CPU register state
 - `error_message` — error details on failure
+
+`mode`, `instructions_executed`, `stub_calls` and `final_registers` are set in a
+`finally` block, so they are correct for pass, timeout, unsupported-instruction,
+missing-stub and unexpected-syscall outcomes alike. Consumers must not treat a
+zero `instructions_executed` as proof nothing ran without also checking `result`.
 
 ## CLI Usage
 
