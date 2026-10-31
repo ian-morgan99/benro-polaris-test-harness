@@ -50,7 +50,9 @@ It should provide:
 - executable regression scenarios that OpenPolaris and the firmware patcher can call from CI;
 - a durable evidence ledger showing exactly which physical observation each emulated behaviour came from;
 - ARM user-space emulation for Stage-2/`pgphoto` executable lifecycle tests (issue #15),
-  using the Unicorn CPU emulator in user space without elevated privileges.
+  using the Unicorn CPU emulator in user space without elevated privileges;
+- Astro WebUI harness server with synthetic Astro API and browser smoke test (issue #20),
+  serving synthetic static assets over loopback in dry-run mode only.
 
 ## ARM Emulation (Issue #15) — Agent Usage Guide
 
@@ -127,6 +129,61 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 - **Never mutate** the input artifact
 - **Bind every run** to binary SHA-256, patcher commit, harness revision, emulator version, stub profile, command
 - **No privileged QEMU**, no host networking/bridge/iptables
+- **Independent component** — no coupling to protocol engine or runtime verifier
+
+## Astro WebUI (Issue #20) — Agent Usage Guide
+
+The Astro WebUI harness server lives in `src/polaris_harness/astro_webui/` and is an **independent harness component** — it does not depend on the Polaris protocol scenario engine, runtime verifier, or transport layer.
+
+### What it provides
+
+- `create_app()` — Flask-based server serving synthetic Astro static assets
+- `run_server()` — CLI entry point (`polaris-harness astro-webui --profile synthetic`)
+- Synthetic Astro API: state, capture, solve, goto, tracking, exif, rate-control, reset
+- 9 schema-backed synthetic scenarios (all `source: synthetic`)
+- Route/API compatibility report endpoint (`/api/astro/compatibility`)
+- Asset provenance manifest with SHA-256 hashes
+
+### How other agents should use it
+
+**Do not** import from `polaris_harness.engine`, `polaris_harness.runtime`, or `polaris_harness.transport` inside `astro_webui/`. Keep the boundary strict.
+
+**Do** use the public API exported from `polaris_harness.astro_webui`:
+
+```python
+from polaris_harness.astro_webui import create_app, run_server, list_scenarios
+
+# Create the Flask app
+app = create_app()
+
+# List available synthetic scenarios
+scenarios = list_scenarios()
+
+# Run the server (dry-run only, loopback by default)
+run_server(host="127.0.0.1", port=8080, profile="synthetic")
+```
+
+### Sample prompt for testing new fixes
+
+When asking another agent to test a fix to the Astro WebUI component, provide this prompt:
+
+> I've made a change to the Astro WebUI harness server in `src/polaris_harness/astro_webui/`. Please:
+>
+> 1. Run the full test suite: `python -m pytest tests/ -v`
+> 2. Verify the Astro WebUI server starts: `polaris-harness astro-webui --profile synthetic --host 127.0.0.1 --port 0`
+> 3. Verify static assets return HTTP 200 with recorded hashes
+> 4. Verify the synthetic API responds correctly (state, capture, solve, goto, etc.)
+> 5. Verify all actions are dry-run only (no physical Polaris contact)
+> 6. Run mypy: `python -m mypy src/polaris_harness/astro_webui/ --ignore-missing-imports`
+> 7. Confirm no imports from `polaris_harness.engine`, `polaris_harness.runtime`, or `polaris_harness.transport` exist inside `src/polaris_harness/astro_webui/`
+> 8. Report any failures with the full error output
+
+### Key constraints (from issue #20)
+
+- **Dry-run only**: all motion and firmware actions are simulated; no physical Polaris or camera contact
+- **No Benro Connect APK or decompiled assets** in the public harness
+- **Rate control remains explicitly unavailable** unless a separately qualified contract is supplied
+- **All scenarios labelled `source: synthetic`** — never presented as observed camera behaviour
 - **Independent component** — no coupling to protocol engine or runtime verifier
 
 ## What this project is NOT

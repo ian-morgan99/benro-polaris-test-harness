@@ -12,6 +12,7 @@ Read before coding:
 4. `docs/SCENARIO-FORMAT.md`
 5. `docs/OWNERSHIP-AND-ISOLATION.md`
 6. `docs/ARM_EMULATION.md` (for ARM user-space emulation work, issue #15)
+7. `docs/ASTRO_WEBUI.md` (for Astro WebUI harness server work, issue #20)
 
 If an issue-specific instruction conflicts with these documents, stop and surface the conflict rather than silently changing the architecture.
 
