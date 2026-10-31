@@ -21,6 +21,8 @@ import yaml
 from .arm_emulator import (
     ARMEmulator,
     FixtureManager,
+    StubRegistry,
+    create_default_profile,
     run_all_lifecycle_cases,
 )
 from .arm_emulator.contract import ArmEmulationContract
@@ -392,20 +394,50 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
             print(f"✗ Fixture not found: {args.fixture}")
             return 2
 
-        from .arm_emulator import EmulationConfig
-
-        config = EmulationConfig(
-            binary_path=fixture.path,
-            binary_sha256=fixture.sha256,
-            patcher_commit=args.patcher_commit or "unknown",
-            harness_revision=args.harness_revision or "0.1.0",
-            emulator_version=args.emulator_version or "unknown",
-            fixture_stub_profile=args.stub_profile or "default",
-            command=args.command or "capture_image_with_Bulb",
-            entry_address=args.entry_address or 0x1000,
-        )
+        # Sidecar-declared mode/entry are honoured unless overridden on the CLI,
+        # so a real ARM region is not silently decoded as Thumb.
+        try:
+            config = fixture_manager.to_emulation_config(
+                fixture_name=args.fixture,
+                patcher_commit=args.patcher_commit or "unknown",
+                harness_revision=args.harness_revision or "0.1.0",
+                emulator_version=args.emulator_version or "unknown",
+                stub_profile=args.stub_profile or "default",
+                command=args.command or "capture_image_with_Bulb",
+                entry_address=args.entry_address,
+                mode=getattr(args, "mode", None),
+            )
+        except ValueError as e:
+            print(f"✗ {e}")
+            return 2
 
         emulator = ARMEmulator(config)
+
+        # Register sidecar-declared stub entries so external calls reach stubs.
+        profile = create_default_profile()
+        registry = StubRegistry()
+        profile.register_all(registry)
+        for name, handler in registry._handlers.items():
+            emulator.register_stub(name, handler)
+        for name, shape in getattr(registry, "_abi_shapes", {}).items():
+            emulator.set_stub_abi_shape(name, shape)
+        for entry in fixture.stub_entries:
+            address = entry.get("address")
+            stub_name = entry.get("stub_name")
+            if address is None or stub_name is None:
+                continue
+            if stub_name not in emulator._stub_registry:
+                print(f"✗ Fixture declares a stub entry for unregistered stub "
+                      f"{stub_name!r}")
+                return 2
+            emulator.register_stub_entry(
+                stub_name,
+                int(address),
+                function_name=entry.get("function_name"),
+                abi_shape=entry.get("abi_shape"),
+                model=entry.get("model", "call-site"),
+            )
+
         result_record = emulator.run()
         contract = ArmEmulationContract.from_emulation_result(result_record)
 
@@ -608,8 +640,12 @@ Exit codes:
         help="Stub profile name (default: default)"
     )
     arm_emulate_parser.add_argument(
-        "--entry-address", type=lambda x: int(x, 0), default=0x1000,
-        help="Entry point address (default: 0x1000)"
+        "--entry-address", type=lambda x: int(x, 0), default=None,
+        help="Override the entry point address (default: fixture sidecar value)"
+    )
+    arm_emulate_parser.add_argument(
+        "--mode", choices=["arm", "thumb"], default=None,
+        help="Override the instruction mode (default: fixture sidecar value)"
     )
     arm_emulate_parser.add_argument(
         "--patcher-commit", default="unknown",

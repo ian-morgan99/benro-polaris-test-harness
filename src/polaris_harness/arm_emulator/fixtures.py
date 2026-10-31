@@ -23,7 +23,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .emulator import EmulationConfig
 
@@ -39,6 +39,19 @@ class FixtureMetadata:
     description: str
     source_issue: Optional[str] = None
     provenance: Dict[str, Any] = field(default_factory=dict)
+
+    # Execution parameters declared by the sidecar. These are required to run a
+    # real extracted region correctly: an ARM region decoded as Thumb faults on
+    # instruction one, and external calls only reach stubs when their entry
+    # addresses are registered.
+    mode: Optional[str] = None
+    entry_address: Optional[int] = None
+    code_address: Optional[int] = None
+    code_size: Optional[int] = None
+    max_instructions: Optional[int] = None
+    # [{"address": int, "stub_name": str, "function_name": str,
+    #   "model": "call-site"|"target", "abi_shape": {...}}]
+    stub_entries: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class FixtureManager:
@@ -64,6 +77,12 @@ class FixtureManager:
             description = ""
             source_issue = None
             provenance = {}
+            mode = None
+            entry_address = None
+            code_address = None
+            code_size = None
+            max_instructions = None
+            stub_entries: List[Dict[str, Any]] = []
 
             if meta_file.exists():
                 try:
@@ -72,6 +91,17 @@ class FixtureManager:
                     description = meta.get("description", "")
                     source_issue = meta.get("source_issue")
                     provenance = meta.get("provenance", {})
+
+                    prov = provenance if isinstance(provenance, dict) else {}
+                    mode = prov.get("mode")
+                    entry_address = self._coerce_int(prov.get("entry_address"))
+                    code_address = self._coerce_int(prov.get("code_address"))
+                    code_size = self._coerce_int(prov.get("code_size"))
+                    max_instructions = self._coerce_int(
+                        prov.get("max_instructions"))
+                    entries = prov.get("stub_entries", [])
+                    if isinstance(entries, list):
+                        stub_entries = [e for e in entries if isinstance(e, dict)]
                 except (json.JSONDecodeError, OSError):
                     pass
 
@@ -83,7 +113,40 @@ class FixtureManager:
                 description=description,
                 source_issue=source_issue,
                 provenance=provenance,
+                mode=mode,
+                entry_address=entry_address,
+                code_address=code_address,
+                code_size=code_size,
+                max_instructions=max_instructions,
+                stub_entries=stub_entries,
             )
+
+    @staticmethod
+    def _coerce_int(value: Any) -> Optional[int]:
+        """Coerce a sidecar value to an int, accepting hex strings.
+
+        Provenance is usually recorded in hex (``"0x101aac"``). Accepting both
+        forms avoids a silent misread or crash when a real region's sidecar is
+        written from those notes.
+
+        Args:
+            value: int, decimal/hex string, or None
+
+        Returns:
+            The integer value, or None if it cannot be interpreted
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value, 0)
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
     def _compute_sha256(path: Path) -> str:
@@ -143,10 +206,16 @@ class FixtureManager:
         emulator_version: str,
         stub_profile: str,
         command: str,
-        entry_address: int = 0x1000,
+        entry_address: Optional[int] = None,
+        mode: Optional[str] = None,
         **kwargs,
     ) -> EmulationConfig:
         """Create an EmulationConfig from a fixture.
+
+        Execution parameters come from the fixture sidecar when present, so a
+        real ARM region loads in ARM mode at its recorded entry address instead
+        of silently defaulting to Thumb at 0x1000. Explicit arguments always
+        win over sidecar values.
 
         Args:
             fixture_name: Name of the fixture to use
@@ -155,29 +224,53 @@ class FixtureManager:
             emulator_version: Emulator version
             stub_profile: Stub profile name
             command: Command being emulated
-            entry_address: Entry point address
+            entry_address: Override for the entry point address
+            mode: Override for the instruction mode ("arm" or "thumb")
             **kwargs: Additional EmulationConfig overrides
 
         Returns:
             EmulationConfig instance
 
         Raises:
-            ValueError: If the fixture is not found
+            ValueError: If the fixture is not found, or its sidecar declares an
+                unknown instruction mode (fail closed)
         """
         fixture = self.get_fixture(fixture_name)
         if fixture is None:
             raise ValueError(f"Fixture not found: {fixture_name}")
 
-        config = EmulationConfig(
-            binary_path=fixture.path,
+        resolved_mode = mode if mode is not None else (fixture.mode or "thumb")
+        if resolved_mode not in ("arm", "thumb"):
+            raise ValueError(
+                f"Fixture {fixture_name} declares invalid mode {resolved_mode!r}; "
+                f"expected 'arm' or 'thumb'"
+            )
+
+        if entry_address is not None:
+            resolved_entry = int(entry_address)
+        elif fixture.entry_address is not None:
+            resolved_entry = int(fixture.entry_address)
+        else:
+            resolved_entry = 0x1000
+
+        config = EmulationConfig(            binary_path=fixture.path,
             binary_sha256=fixture.sha256,
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_stub_profile=stub_profile,
             command=command,
-            entry_address=entry_address,
+            entry_address=resolved_entry,
+            mode=resolved_mode,
         )
+
+        # Sidecar-level memory/limit overrides, still subordinate to kwargs.
+        if fixture.code_address is not None:
+            config.code_address = int(fixture.code_address)
+        if fixture.code_size is not None:
+            config.code_size = int(fixture.code_size)
+        if fixture.max_instructions is not None:
+            config.max_instructions = int(fixture.max_instructions)
 
         # Apply any overrides
         for key, value in kwargs.items():

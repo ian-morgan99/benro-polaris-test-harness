@@ -43,10 +43,43 @@ it locally:
 3. Verify SHA-256: `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3`
 4. Place the extracted binary as `tests/fixtures/arm/stage2_region.bin`
    (locally only — do NOT commit).
-5. Update this placeholder with patcher commit, harness revision, emulator
+5. Create the sidecar `tests/fixtures/arm/stage2_region.json` declaring how to
+   execute it. Without this the region is decoded as Thumb at `0x1000` and
+   faults on instruction one, and external calls run as real code instead of
+   reaching stubs:
+
+   ```json
+   {
+     "description": "capture_image_with_Bulb region, v90-era",
+     "source_issue": "ian-morgan99/benro-polaris-firmware-patcher#251",
+     "provenance": {
+       "type": "extracted-private",
+       "mode": "arm",
+       "entry_address": "0x101aac",
+       "code_address": "0x101aac",
+       "code_size": 65536,
+       "max_instructions": 200000,
+       "stub_entries": [
+         {"address": "<stop target>", "stub_name": "camera",
+          "function_name": "stop", "model": "target"},
+         {"address": "<close target>", "stub_name": "camera",
+          "function_name": "close", "model": "target"}
+       ]
+     }
+   }
+   ```
+
+   `code_address` must contain the entry address and every stub entry address.
+   Stub targets are the PLT-style callee addresses; use `"model": "target"` for
+   them, or `"call-site"` if you register the `BL` instruction itself instead.
+   The lifecycle assertions filter on `function_name`, so declare one per entry.
+6. Update this placeholder with patcher commit, harness revision, emulator
    version, fixture/stub profile, and command.
-6. Add a test in `tests/test_arm_emulator.py` that loads and replays this
-   region with explicit ABI stubs.
+7. Run `polaris-harness arm-emulate --suite`. With the region present the nine
+   cases execute it in ARM mode; a behavioural failure exits 3.
+
+A committed, firmware-free example of a correctly annotated fixture is
+`tests/fixtures/arm/lifecycle_probe_fixture.{bin,json}`.
 
 ## Constraints (from issue #15)
 

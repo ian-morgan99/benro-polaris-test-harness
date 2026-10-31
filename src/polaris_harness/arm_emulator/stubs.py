@@ -50,19 +50,24 @@ class StubProfile:
     def register_all(self, registry: "StubRegistry") -> None:
         """Register all stubs in this profile with the registry.
 
+        Per-boundary ABI shapes declared in ``abi_shape`` are carried through so
+        the emulator can marshal arguments past R3 and follow pointer arguments.
+
         Args:
             registry: StubRegistry instance to register stubs with
         """
-        if self.camera_stub is not None:
-            registry.register("camera", self.camera_stub)
-        if self.libgphoto_stub is not None:
-            registry.register("libgphoto", self.libgphoto_stub)
-        if self.os_stub is not None:
-            registry.register("os", self.os_stub)
-        if self.timer_stub is not None:
-            registry.register("timer", self.timer_stub)
-        if self.callback_stub is not None:
-            registry.register("callback", self.callback_stub)
+        shapes = self.abi_shape or {}
+        for attr, stub_name in (
+            ("camera_stub", "camera"),
+            ("libgphoto_stub", "libgphoto"),
+            ("os_stub", "os"),
+            ("timer_stub", "timer"),
+            ("callback_stub", "callback"),
+        ):
+            handler = getattr(self, attr, None)
+            if handler is not None:
+                registry.register(stub_name, handler,
+                                  abi_shape=shapes.get(stub_name))
 
 
 @dataclass
@@ -81,17 +86,23 @@ class StubRegistry:
 
     def __init__(self):
         self._handlers: Dict[str, Callable] = {}
+        self._abi_shapes: Dict[str, Dict[str, Any]] = {}
         self._call_history: List[Dict[str, Any]] = []
         self._logger = logging.getLogger(f"{__name__}.StubRegistry")
 
-    def register(self, name: str, handler: Callable) -> None:
+    def register(self, name: str, handler: Callable,
+                 abi_shape: Optional[Dict[str, Any]] = None) -> None:
         """Register a stub handler.
 
         Args:
             name: Stub identifier
             handler: Callable stub handler
+            abi_shape: Optional per-boundary ABI shape ({"arg_count": int,
+                "pointer_args": [int], "deref_bytes": {int: int}})
         """
         self._handlers[name] = handler
+        if abi_shape:
+            self._abi_shapes[name] = dict(abi_shape)
         self._logger.debug("Registered stub: %s", name)
 
     def call(self, stub_name: str, function_name: str, arguments: List[Any],

@@ -122,6 +122,13 @@ class LifecycleScenario:
     def _create_emulator(self, command: str, stub_profile: str = "default") -> ARMEmulator:
         """Create an ARMEmulator configured for this scenario.
 
+        Mode and entry address come from the fixture sidecar (see
+        ``FixtureManager.to_emulation_config``), and any ``stub_entries`` the
+        sidecar declares are registered so external calls reach stubs instead
+        of executing as real code. Without that wiring a real ARM region would
+        be decoded as Thumb and fault on instruction one, and lifecycle
+        assertions filtering on semantic function names could never match.
+
         Args:
             command: Command being emulated
             stub_profile: Stub profile name
@@ -139,9 +146,32 @@ class LifecycleScenario:
         )
         emulator = ARMEmulator(config)
 
-        # Register stubs with the emulator
+        # Register stubs with the emulator, carrying per-boundary ABI shapes.
         for name, handler in self.stub_registry._handlers.items():
             emulator.register_stub(name, handler)
+        for name, shape in getattr(self.stub_registry, "_abi_shapes", {}).items():
+            emulator.set_stub_abi_shape(name, shape)
+
+        # Register stub entry addresses declared by the fixture sidecar.
+        for entry in self.fixture_manager.get_fixture(self.fixture_name).stub_entries:
+            address = entry.get("address")
+            stub_name = entry.get("stub_name")
+            if address is None or stub_name is None:
+                continue
+            if stub_name not in emulator._stub_registry:
+                # Fail closed: a declared entry for an unregistered stub means
+                # the fixture and profile disagree about the boundary.
+                raise KeyError(
+                    f"Fixture {self.fixture_name} declares a stub entry for "
+                    f"unregistered stub {stub_name!r} at 0x{int(address):x}"
+                )
+            emulator.register_stub_entry(
+                stub_name,
+                int(address),
+                function_name=entry.get("function_name"),
+                abi_shape=entry.get("abi_shape"),
+                model=entry.get("model", "call-site"),
+            )
 
         return emulator
 
@@ -668,14 +698,22 @@ def run_all_lifecycle_cases(
     patcher_commit: str = "unknown",
     harness_revision: str = "0.1.0",
     emulator_version: str = "unknown",
+    fixture_name: str = "stage2_region",
 ) -> Dict[LifecycleCase, LifecycleTestResult]:
     """Run all 9 #251 lifecycle test cases.
+
+    The suite targets the real Stage-2 region by default. When that binary is
+    not present locally every case reports SKIP (not FAIL), so a missing
+    private fixture never looks like a behavioural failure - and when it *is*
+    present the cases actually execute it, in ARM mode at its recorded entry
+    address with stub entries registered.
 
     Args:
         fixture_manager: FixtureManager instance
         patcher_commit: Patcher commit SHA
         harness_revision: Harness revision
         emulator_version: Emulator version
+        fixture_name: Fixture to run the cases against (default "stage2_region")
 
     Returns:
         Dictionary mapping LifecycleCase to LifecycleTestResult
@@ -687,6 +725,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case2MessageStopVsContextCancel(
             LifecycleCase.CASE_2_MESSAGE_STOP_VS_CONTEXT_CANCEL,
@@ -694,6 +733,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case3CancelResultSurvivesStop(
             LifecycleCase.CASE_3_CANCEL_RESULT_SURVIVES_STOP,
@@ -701,6 +741,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case4StopFailurePreservesPrimaryError(
             LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR,
@@ -708,6 +749,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case5DeferredTimedCaptureCancelled(
             LifecycleCase.CASE_5_DEFERRED_TIMED_CAPTURE_CANCELLED,
@@ -715,6 +757,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case6NormalTimerExpiry(
             LifecycleCase.CASE_6_NORMAL_TIMER_EXPIRY,
@@ -722,6 +765,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case7CallbackOrderingRegisterPreservation(
             LifecycleCase.CASE_7_CALLBACK_ORDERING_REGISTER_PRESERVATION,
@@ -729,6 +773,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case8OutputPublicationCleanup(
             LifecycleCase.CASE_8_OUTPUT_PUBLICATION_CLEANUP,
@@ -736,6 +781,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
         Case9ManualNonBControl(
             LifecycleCase.CASE_9_MANUAL_NON_B_CONTROL,
@@ -743,6 +789,7 @@ def run_all_lifecycle_cases(
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,
             emulator_version=emulator_version,
+            fixture_name=fixture_name,
         ),
     ]
 

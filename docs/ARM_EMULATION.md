@@ -232,7 +232,56 @@ procedure and provenance fields.
 
 When available locally, it must be accompanied by full provenance:
 SHA-256, patcher commit, harness revision, emulator version, fixture/stub
-profile, and command.
+profile, and command. It also needs a `stage2_region.json` sidecar declaring
+`mode: "arm"`, the entry address and the `stub_entries` for every external
+call - see [Fixture execution metadata](#fixture-execution-metadata). Without
+those the region is decoded as Thumb and faults immediately.
+
+## Fixture execution metadata
+
+A fixture's sidecar `*.json` may declare the parameters needed to execute it.
+`FixtureManager.to_emulation_config()` reads them, so a real ARM region loads in
+ARM mode at its recorded entry address instead of silently defaulting to Thumb
+at `0x1000` (which faults on instruction one). Explicit arguments and CLI flags
+always override sidecar values.
+
+```json
+{
+  "provenance": {
+    "mode": "arm",
+    "entry_address": "0x101aac",
+    "code_address": "0x101aac",
+    "code_size": 65536,
+    "max_instructions": 200000,
+    "stub_entries": [
+      {"address": "0x10f00", "stub_name": "camera", "function_name": "stop",
+       "model": "target"},
+      {"address": "0x10f04", "stub_name": "camera", "function_name": "close",
+       "model": "target"}
+    ]
+  }
+}
+```
+
+Addresses may be integers or hex strings, so they can be copied straight from
+the provenance notes. `code_address` must contain both the entry address and
+every stub entry address - the emulator maps exactly one code region.
+
+- `mode` — `"arm"` or `"thumb"`; an unknown value raises rather than running.
+- `entry_address` / `code_address` / `code_size` / `max_instructions` — execution
+  parameters for the region.
+- `stub_entries` — addresses to intercept, each with a semantic `function_name`
+  and an interception `model`. Lifecycle assertions filter on those names, so a
+  fixture used by lifecycle cases must declare them; without entries, external
+  calls execute as real code instead of reaching stubs. An entry naming an
+  unregistered stub raises (fail closed).
+
+`tests/fixtures/arm/lifecycle_probe_fixture.{bin,json}` is a hand-assembled ARM
+fixture that exercises this path and is committed - it contains no firmware.
+
+The lifecycle suite targets `stage2_region` by default. When the binary is absent
+locally every case reports **SKIP** and the CLI exits **0**; when it is present
+the cases execute it, and a behavioural failure exits **3**.
 
 ## Evidence Hierarchy
 

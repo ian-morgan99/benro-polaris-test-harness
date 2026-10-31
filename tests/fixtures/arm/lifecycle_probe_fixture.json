@@ -1,0 +1,46 @@
+{
+  "description": "Synthetic ARM fixture: MOV R0,#1; BL stop; BL close. Proves sidecar-declared mode, entry address and stub_entries drive the emulator (issue #19).",
+  "source_issue": "ian-morgan99/benro-polaris-test-harness#19",
+  "provenance": {
+    "type": "synthetic",
+    "architecture": "ARM",
+    "mode": "arm",
+    "entry_address": 4096,
+    "code_address": 4096,
+    "code_size": 4096,
+    "max_instructions": 50,
+    "instructions": [
+      {
+        "mnemonic": "MOV R0, #1",
+        "encoding": "0xE3A00001"
+      },
+      {
+        "mnemonic": "BL stop",
+        "encoding": "0xEB000005"
+      },
+      {
+        "mnemonic": "BL close",
+        "encoding": "0xEB000005"
+      }
+    ],
+    "stub_entries": [
+      {
+        "address": 4128,
+        "stub_name": "camera",
+        "function_name": "stop",
+        "model": "target"
+      },
+      {
+        "address": 4132,
+        "stub_name": "camera",
+        "function_name": "close",
+        "model": "target"
+      }
+    ],
+    "expected_stub_calls": [
+      "stop",
+      "close"
+    ],
+    "expected_exit_code": 0
+  }
+}

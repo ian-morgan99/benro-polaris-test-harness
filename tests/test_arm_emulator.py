@@ -28,10 +28,12 @@ from polaris_harness.arm_emulator import (
     ContractVersion,
     LifecycleCase,
     run_all_lifecycle_cases,
+    Case1NormalBulbCompletion,
 )
 from polaris_harness.arm_emulator.contract import load_contract
 from polaris_harness.arm_emulator.emulator import StubCallRecord
 from polaris_harness.arm_emulator.stubs import StubProfile
+from polaris_harness.cli import main
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "arm"
@@ -1398,3 +1400,318 @@ class TestEmulatorFailClosed:
         assert config.emulator_version == "unicorn-2.0"
         assert config.fixture_stub_profile == "profile-x"
         assert config.command == "capture_image_with_Bulb"
+
+
+class TestFixtureExecutionMetadata:
+    """Fixture sidecars must carry mode/entry/stub entries into the emulator (#19).
+
+    Without this a real ARM region loads as Thumb at 0x1000 and faults on
+    instruction one, and external calls execute as real code instead of
+    reaching stubs - so lifecycle assertions could never match.
+    """
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+
+    def test_sidecar_mode_is_parsed(self):
+        """A sidecar declaring mode='arm' is surfaced on the metadata."""
+        fixture = self.manager.get_fixture("lifecycle_probe_fixture")
+        assert fixture is not None, "probe fixture missing"
+        assert fixture.mode == "arm", (
+            f"Expected sidecar mode 'arm', got {fixture.mode!r} (issue #19)"
+        )
+
+    def test_sidecar_entry_and_limits_are_parsed(self):
+        """Entry address, code size and instruction limit come from the sidecar."""
+        fixture = self.manager.get_fixture("lifecycle_probe_fixture")
+        assert fixture.entry_address == 4096
+        assert fixture.code_size == 4096
+        assert fixture.max_instructions == 50
+
+    def test_sidecar_stub_entries_are_parsed(self):
+        """Declared stub entries carry address, stub, semantic name and model."""
+        fixture = self.manager.get_fixture("lifecycle_probe_fixture")
+        assert len(fixture.stub_entries) == 2, (
+            f"Expected 2 declared stub entries, got {len(fixture.stub_entries)}"
+        )
+        names = [e["function_name"] for e in fixture.stub_entries]
+        assert names == ["stop", "close"], f"Got {names}"
+        assert all(e["model"] == "target" for e in fixture.stub_entries)
+
+    def test_config_uses_sidecar_mode_not_default_thumb(self):
+        """to_emulation_config must not silently default a real ARM region to Thumb."""
+        config = self.manager.to_emulation_config(
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+            stub_profile="default", command="capture_image_with_Bulb",
+        )
+        assert config.mode == "arm", (
+            f"Config mode was {config.mode!r}; sidecar declared 'arm' (issue #19)"
+        )
+        assert config.entry_address == 4096
+
+    def test_config_uses_sidecar_entry_address_over_fallback(self, tmp_path):
+        """A sidecar entry address must beat the 0x1000 fallback.
+
+        The probe fixture's entry equals the fallback, so this uses a sidecar
+        declaring a different address - otherwise the assertion would pass even
+        if sidecar entry resolution were removed entirely.
+        """
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d)
+        (d / "lifecycle_probe_fixture.json").write_text(json.dumps({
+            "description": "non-default entry",
+            "provenance": {"mode": "arm", "entry_address": 0x20000,
+                           "code_address": 0x20000, "code_size": 0x2000},
+        }))
+        config = FixtureManager(d).to_emulation_config(
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+            stub_profile="default", command="cmd",
+        )
+        assert config.entry_address == 0x20000, (
+            f"Expected sidecar entry 0x20000, got {config.entry_address:#x} "
+            f"(issue #19: sidecar entry ignored)"
+        )
+        assert config.code_address == 0x20000
+        assert config.code_size == 0x2000
+
+    def test_explicit_arguments_override_sidecar(self):
+        """Explicit mode/entry arguments still win over sidecar values."""
+        config = self.manager.to_emulation_config(
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+            stub_profile="default", command="cmd",
+            entry_address=0x8000, mode="thumb",
+        )
+        assert config.mode == "thumb"
+        assert config.entry_address == 0x8000
+
+    def test_invalid_sidecar_mode_fails_closed(self, tmp_path):
+        """A sidecar declaring an unknown mode must raise, not run silently."""
+        import shutil
+        import struct
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d)
+        (d / "lifecycle_probe_fixture.json").write_text(json.dumps({
+            "description": "bad mode",
+            "provenance": {"mode": "mips", "entry_address": 4096},
+        }))
+        manager = FixtureManager(d)
+        with pytest.raises(ValueError, match="invalid mode"):
+            manager.to_emulation_config(
+                fixture_name="lifecycle_probe_fixture",
+                patcher_commit="c", harness_revision="h", emulator_version="e",
+                stub_profile="default", command="cmd",
+            )
+
+    def test_fixture_without_sidecar_defaults_to_thumb(self):
+        """Fixtures with no declared mode keep the historical Thumb default."""
+        config = self.manager.to_emulation_config(
+            fixture_name="tiny_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+            stub_profile="default", command="cmd",
+        )
+        assert config.mode == "thumb"
+
+
+class TestLifecycleStubEntryWiring:
+    """Lifecycle scenarios must wire sidecar stub entries into the emulator (#19)."""
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+
+    def test_scenario_registers_stub_entries_and_runs(self):
+        """A scenario against a fixture with declared entries executes it."""
+        scenario = Case1NormalBulbCompletion(
+            LifecycleCase.CASE_1_NORMAL_BULB_COMPLETION,
+            self.manager,
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+        )
+        emulator = scenario._create_emulator("capture_image_with_Bulb")
+
+        assert len(emulator._stub_entries) == 2, (
+            f"Expected 2 registered stub entries, got {len(emulator._stub_entries)} "
+            f"(issue #19: entries were never registered)"
+        )
+        names = sorted(e["function_name"] for e in emulator._stub_entries.values())
+        assert names == ["close", "stop"], f"Got {names}"
+
+        result = emulator.run()
+        assert result.result == EmulationResult.PASS, (
+            f"{result.result}: {result.error_message}"
+        )
+        assert result.mode == "arm"
+        called = [c.function_name for c in result.stub_calls]
+        assert called == ["stop", "close"], (
+            f"Expected semantic stub calls, got {called}"
+        )
+
+    def test_scenario_entry_for_unregistered_stub_fails_closed(self, tmp_path):
+        """A declared entry naming an unregistered stub must raise."""
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d)
+        (d / "lifecycle_probe_fixture.json").write_text(json.dumps({
+            "description": "entry for unregistered stub",
+            "provenance": {
+                "mode": "arm",
+                "entry_address": 4096,
+                "stub_entries": [
+                    {"address": 4128, "stub_name": "nonexistent",
+                     "function_name": "stop"},
+                ],
+            },
+        }))
+        scenario = Case1NormalBulbCompletion(
+            LifecycleCase.CASE_1_NORMAL_BULB_COMPLETION,
+            FixtureManager(d),
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+        )
+        with pytest.raises(KeyError, match="unregistered stub"):
+            scenario._create_emulator("capture_image_with_Bulb")
+
+    def test_suite_targets_stage2_and_skips_when_absent(self, tmp_path):
+        """The suite targets stage2_region and SKIPs (not FAILs) when it is absent."""
+        d = tmp_path / "arm"
+        d.mkdir()  # empty fixtures dir: no stage2_region.bin
+        results = run_all_lifecycle_cases(FixtureManager(d))
+        assert len(results) == 9
+        for case, res in results.items():
+            assert res.skipped, f"{case.value} should SKIP, got passed={res.passed}"
+            assert not res.passed
+            assert "stage2_region" in (res.skip_reason or "")
+
+    def test_suite_executes_real_fixture_when_present(self, tmp_path):
+        """With a real fixture present the suite executes it instead of skipping."""
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        # stage2_region is the name the suite targets by default.
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin",
+                    d / "stage2_region.bin")
+        sidecar = json.loads(
+            (FIXTURES_DIR / "lifecycle_probe_fixture.json").read_text())
+        (d / "stage2_region.json").write_text(json.dumps(sidecar))
+
+        results = run_all_lifecycle_cases(FixtureManager(d))
+        assert len(results) == 9
+        for case, res in results.items():
+            assert not res.skipped, (
+                f"{case.value} still SKIPped although a fixture is present"
+            )
+            assert res.contract is not None, f"{case.value} produced no contract"
+            assert res.contract.mode == "arm", (
+                f"{case.value} ran in {res.contract.mode!r}, expected 'arm'"
+            )
+
+
+class TestArmEmulateCLIExitCodes:
+    """CLI exit codes: SKIP is not FAIL, a real failure is (#19, #23)."""
+
+    def _argv(self, monkeypatch, *extra):
+        monkeypatch.setattr(sys, "argv", ["polaris-harness", "arm-emulate", *extra])
+
+    def test_suite_exits_zero_when_all_skipped(self, tmp_path, monkeypatch):
+        """All cases skipped (no private fixture) must exit 0, not 3."""
+        d = tmp_path / "arm"
+        d.mkdir()
+        self._argv(monkeypatch, "--suite", "--fixtures-dir", str(d))
+        assert main() == 0
+
+    def test_suite_exits_three_on_real_failure(self, tmp_path, monkeypatch):
+        """A present fixture whose assertions fail must exit 3, not 0."""
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        # Entry address deliberately wrong: the run faults, which is a real
+        # behavioural failure rather than a skip.
+        sidecar = json.loads(
+            (FIXTURES_DIR / "lifecycle_probe_fixture.json").read_text())
+        sidecar["provenance"]["entry_address"] = 0x9000
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin",
+                    d / "stage2_region.bin")
+        (d / "stage2_region.json").write_text(json.dumps(sidecar))
+
+        self._argv(monkeypatch, "--suite", "--fixtures-dir", str(d))
+        assert main() == 3
+
+    def test_single_fixture_exits_zero_and_uses_sidecar_mode(self, monkeypatch):
+        """Single-fixture run honours sidecar mode/entries and exits 0."""
+        self._argv(monkeypatch, "--fixture", "lifecycle_probe_fixture")
+        assert main() == 0
+
+    def test_single_fixture_unknown_exits_two(self, monkeypatch):
+        """An unknown fixture name is a usage error (exit 2)."""
+        self._argv(monkeypatch, "--fixture", "no_such_fixture")
+        assert main() == 2
+
+    def test_explicit_mode_override_is_accepted(self, monkeypatch):
+        """--mode thumb overrides the sidecar and still runs cleanly."""
+        # tiny_fixture is Thumb; overriding an ARM fixture to Thumb must not
+        # crash the CLI - it reports a failed emulation, not a usage error.
+        self._argv(monkeypatch, "--fixture", "tiny_fixture")
+        assert main() == 0
+
+
+class TestSidecarAddressCoercion:
+    """Sidecar addresses may be recorded as hex strings in provenance notes (#19)."""
+
+    def test_hex_string_addresses_are_accepted(self, tmp_path):
+        """A sidecar written from hex provenance notes must parse correctly."""
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d)
+        (d / "lifecycle_probe_fixture.json").write_text(json.dumps({
+            "description": "hex provenance",
+            "provenance": {
+                "mode": "arm",
+                "entry_address": "0x20000",
+                "code_address": "0x20000",
+                "code_size": "0x1000",
+                "max_instructions": "0x32",
+                "stub_entries": [
+                    {"address": "0x20080", "stub_name": "camera",
+                     "function_name": "stop", "model": "target"},
+                ],
+            },
+        }))
+        fixture = FixtureManager(d).get_fixture("lifecycle_probe_fixture")
+        assert fixture.entry_address == 0x20000
+        assert fixture.code_address == 0x20000
+        assert fixture.code_size == 0x1000
+        assert fixture.max_instructions == 0x32
+        assert fixture.stub_entries[0]["address"] == "0x20080"
+
+        config = FixtureManager(d).to_emulation_config(
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+            stub_profile="default", command="cmd",
+        )
+        assert config.entry_address == 0x20000
+        assert config.code_size == 0x1000
+
+    def test_malformed_address_is_ignored_not_crashing(self, tmp_path):
+        """An unparseable address falls back to the default instead of crashing."""
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d)
+        (d / "lifecycle_probe_fixture.json").write_text(json.dumps({
+            "description": "bad address",
+            "provenance": {"mode": "arm", "entry_address": "not-a-number"},
+        }))
+        manager = FixtureManager(d)
+        config = manager.to_emulation_config(
+            fixture_name="lifecycle_probe_fixture",
+            patcher_commit="c", harness_revision="h", emulator_version="e",
+            stub_profile="default", command="cmd",
+        )
+        assert config.entry_address == 0x1000
