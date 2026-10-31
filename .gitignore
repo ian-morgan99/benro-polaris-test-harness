@@ -4,3 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 uploads/
+
+# Stage-2 ARM binary region — extracted locally from pgphoto.stage2ondisk
+# in the private research repo. Do NOT commit to GitHub.
+tests/fixtures/arm/stage2_region.bin
