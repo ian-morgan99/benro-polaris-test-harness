@@ -169,6 +169,12 @@ class TestFixtureIntegrity:
         fixture = manager.get_fixture("stage2_region")
         if fixture is None:
             pytest.skip("stage2_region.bin not supplied locally (private research)")
+        # The sidecar restores .got/.data from the retained source binary, so a
+        # faithful run needs POLARIS_FIRMWARE_ROOT. Without it the globals stay
+        # zero-filled and the run measures a different environment.
+        available, reason = manager.source_binary_available("stage2_region")
+        if not available:
+            pytest.skip(reason)
 
         config = manager.to_emulation_config(
             "stage2_region",
@@ -451,12 +457,20 @@ class TestFixtureIntegrity:
             pytest.skip("stage2_region.bin not supplied locally")
 
         recorded = fixture.provenance.get("observed_behaviour", {})
-        assert recorded.get("instructions_executed") == 33
-        assert recorded.get("stub_calls_recorded") == 2
-        assert recorded.get("fault_address") == "0x101b38"
+        assert recorded.get("instructions_executed") == 71
+        assert recorded.get("stub_calls_recorded") == 6
+        assert recorded.get("fault_address") == "0x101bd0"
         assert "superseded" in recorded, (
-            "the stale 5001-instruction measurement must be marked superseded"
+            "stale measurements must be marked superseded"
         )
+
+        # The sidecar now restores .got/.data from the retained source binary.
+        # Without POLARIS_FIRMWARE_ROOT those patches cannot be resolved, and a
+        # run would fault at 0x101b38 instead - a different measurement of a
+        # different environment, so it must not be compared to the recorded one.
+        available, reason = manager.source_binary_available("stage2_region")
+        if not available:
+            pytest.skip(reason)
 
         config = manager.to_emulation_config(
             "stage2_region",
@@ -2341,6 +2355,71 @@ class TestArmEmulateCLIExitCodes:
         # crash the CLI - it reports a failed emulation, not a usage error.
         self._argv(monkeypatch, "--fixture", "tiny_fixture")
         assert main() == 0
+
+    def test_single_fixture_accepts_hex_stub_entry_addresses(self, tmp_path,
+                                                             monkeypatch):
+        """Hex stub-entry addresses must not crash the single-fixture CLI path.
+
+        The suite coerces sidecar addresses through FixtureManager._coerce_int,
+        but this path parsed them with int(address), so a real region recorded
+        in hex ("0x101b08") raised ValueError and produced no contract at all.
+        """
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin",
+                    d / "probe.bin")
+        (d / "probe.json").write_text(json.dumps({
+            "description": "hex stub entries",
+            "provenance": {
+                "mode": "arm",
+                "entry_address": "0x1000",
+                "code_address": "0x1000",
+                "code_size": "0x1000",
+                "max_instructions": "0x32",
+                "stub_entries": [
+                    {"address": "0x1020", "stub_name": "camera",
+                     "function_name": "stop", "model": "call-site"},
+                ],
+            },
+        }))
+        out = tmp_path / "contract.json"
+        self._argv(monkeypatch, "--fixture", "probe",
+                   "--fixtures-dir", str(d), "--output", str(out))
+        rc = main()
+        # The run may pass or fail on behaviour, but it must produce a contract
+        # rather than dying on address parsing.
+        assert rc in (0, 3), f"unexpected exit {rc}"
+        assert out.exists(), "no contract written - the CLI crashed"
+
+    def test_unparseable_stub_entry_exits_two(self, tmp_path, monkeypatch):
+        """An entry with an uninterpretable address is a fixture defect (exit 2).
+
+        Silently skipping it would run with fewer boundaries wired than the
+        sidecar declares, letting assertions pass against an artifact whose
+        edges were never intercepted.
+        """
+        import shutil
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin",
+                    d / "probe.bin")
+        (d / "probe.json").write_text(json.dumps({
+            "description": "bad stub entry",
+            "provenance": {
+                "mode": "arm",
+                "entry_address": "0x1000",
+                "code_address": "0x1000",
+                "code_size": "0x1000",
+                "stub_entries": [
+                    {"address": "not-a-number", "stub_name": "camera",
+                     "function_name": "stop"},
+                ],
+            },
+        }))
+        self._argv(monkeypatch, "--fixture", "probe",
+                   "--fixtures-dir", str(d))
+        assert main() == 2
 
 
 class TestSidecarAddressCoercion:

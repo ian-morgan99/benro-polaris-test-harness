@@ -192,7 +192,11 @@ polaris-harness arm-emulate \
 | 0 | Success / contract satisfied |
 | 2 | Invalid CLI/config/schema |
 | 3 | Scenario mismatch / assertion failure |
+| 4 | Every evaluated assertion held, but some could not be evaluated against the artifact |
 | 7 | Internal harness error |
+
+Exit 3 takes precedence over 4. Exit 4 exists so that unverified coverage cannot
+look like success in CI: a PARTIAL case contradicted nothing and verified nothing.
 
 ## Lifecycle Test Cases
 
@@ -281,7 +285,9 @@ fixture that exercises this path and is committed - it contains no firmware.
 
 The lifecycle suite targets `stage2_region` by default. When the binary is absent
 locally every case reports **SKIP** and the CLI exits **0**; when it is present
-the cases execute it, and a behavioural failure exits **3**.
+the cases execute it, a behavioural failure exits **3**, and a case whose
+assertions the artifact cannot answer reports **PARTIAL** (exit **4**) rather than
+PASS.
 
 ## Evidence Hierarchy
 
@@ -327,6 +333,21 @@ known outstanding defects include:
 
 - Cancellation-result loss in the shared stop callback
 - Deferred `bulb=0` cancel path initiating a new capture
+
+**The harness cannot currently qualify #251, and that is an engine limit rather
+than a fixture gap.** With `.got`/`.data` seeded from the retained binary,
+`capture_image_with_Bulb` executes 71 instructions and reaches six real boundary
+calls before stopping at `0x101bd0` on `vmov.i32 q8,#0`. Unicorn 2.1.4's ARM
+backend raises `UC_ERR_INSN_INVALID` for every VFP/NEON encoding regardless of FPU
+state, and exposes no CPACR/SCR register to enable the coprocessor. Cases 5-9
+assert timer cancellation/expiry, callback ordering, output publication and manual
+dispatch - none of which are reachable past that instruction.
+
+Separately, disassembling `captureBulbImage` shows it contains a stop edge but no
+close or cancel edge, so cases 1-3 report PARTIAL. No function in the binary has
+both. Qualifying those edges means pinning the functions that own them (for
+example `gp_context_cancel` at `0x358d0`) rather than expecting one region to
+cover all nine cases.
 
 The harness issue #15 tracks the reusable emulator platform; #251 remains the
 owner of the camera-specific fix and acceptance criteria.

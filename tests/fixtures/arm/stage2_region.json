@@ -10,8 +10,8 @@
     "mode": "arm",
     "entry_address": "0x101aac",
     "code_address": "0x101000",
-    "code_size": 2166784,
-    "layout_note": "The region must load at its original vaddr (load_address 0x101aac). It resolves globals with `ldr rN,[pc,#imm]` + `add rN,pc,rN`, whose literal pool words are PC-relative deltas; loading at a relocated base makes those loads compute unrelated addresses and the run faults on its first data access. code_address/code_size map a page-aligned range covering both the blob and the two referenced globals (.got 0x2f6ffc, .data 0x310fd0). Those globals are zero-filled: their real contents are not in the extracted region, so control flow that depends on them is approximate.",
+    "code_size": 2605056,
+    "layout_note": "The region must load at its original vaddr (load_address 0x101aac). It resolves globals with `ldr rN,[pc,#imm]` + `add rN,pc,rN`, whose literal pool words are PC-relative deltas; loading at a relocated base makes those loads compute unrelated addresses and the run faults on its first data access. code_address/code_size map one page-aligned range spanning the artifact plus every global it dereferences: .got 0x2f7000-0x2f7674, .data 0x2f7678-0x3117f4 and .bss 0x3117f8-0x37cea4. .bss needs no seeding - Unicorn zero-fills the mapping, which is exactly what the process has at entry. .got and .data are restored from the retained source binary by memory_patches below.",
     "max_instructions": 5000,
     "elf_flags": "0x5000200 (Version5 EABI, soft-float ABI)",
     "patcher_commit": "8c015c0a73c8affea8fa723badcceb4070ef81b4",
@@ -318,17 +318,21 @@
     "stub_entries_note": "All 42 BL sites resolved from the retained source ELF: 10 via .symtab FUNC entries and 3 via .rel.plt -> .dynsym (sqrt, textdomain, isatty). model is call-site because the intercepted address is the BL instruction inside the mapped blob; the callee bodies are outside the extracted window. Stub grouping is semantic: camera state/capture calls to 'camera', gp_log to 'libgphoto', HI_LOG_Print/sqrt/textdomain/isatty to 'os', timediff_now/delayTime to 'timer', cb_arg_run to 'callback'.",
     "observed_behaviour": {
       "mode": "arm",
-      "instructions_executed": 33,
+      "instructions_executed": 71,
       "result": "unsupported_instruction",
-      "error": "Invalid memory write (UC_ERR_WRITE_UNMAPPED)",
-      "fault_address": "0x101b38",
-      "stub_calls_recorded": 2,
+      "error": "Invalid instruction (UC_ERR_INSN_INVALID)",
+      "fault_address": "0x101bd0",
+      "stub_calls_recorded": 6,
       "stub_calls_seen": {
         "waitCameraIdle": 1,
-        "numOfCaptureImage": 1
+        "numOfCaptureImage": 1,
+        "setCameraStatus": 1,
+        "gp_log": 1,
+        "HI_LOG_Print": 1,
+        "sqrt": 1
       },
-      "interpretation": "Measured with the committed sidecar config: load_address 0x101aac, all 42 call sites registered, default stub profile. Execution passes the former instruction-15 fault and reaches two real boundary calls, then faults at 0x101b38 on a store through a pointer derived from a zero-filled global. Control flow that depends on those globals is therefore approximate; this is an environment-fidelity limit, not a decoding failure.",
-      "superseded": "An earlier revision recorded 5001 instructions / timeout / first_stub setCameraStatus. That was measured with an ad-hoc config using a subset of stub entries and a larger mapping, not the committed sidecar, and is superseded by the values above."
+      "interpretation": "Measured with the committed sidecar config: load_address 0x101aac, code region [0x101000, 0x37d000), .got and .data restored from the retained source binary by memory_patches, all 42 call sites registered, default stub profile. Seeding the globals removed the previous UC_ERR_WRITE_UNMAPPED at 0x101b38 - that store `str r2,[r3,#0xbc0]` dereferences .got+0x628, which holds 0x3787f8 (a .bss address with no dynamic relocation), so zero-filling made the target 0xbc0. Execution now reaches six real boundary calls and stops at 0x101bd0 on `vmov.i32 q8,#0`. That is a hard emulator limit, not an environment gap: Unicorn 2.1.4's ARM backend raises UC_ERR_INSN_INVALID for every VFP/NEON encoding regardless of FPU state (verified directly - `vmov.i32` and `vstr` both fault in a bare Uc(UC_ARCH_ARM, UC_MODE_ARM) instance, and no CPACR/SCR register is exposed to enable the coprocessor). No configuration of this engine can execute past 0x101bd0.",
+      "superseded": "Two earlier measurements are superseded. (1) 5001 instructions / timeout / first_stub setCameraStatus was measured with an ad-hoc config using a subset of stub entries and a larger mapping, not the committed sidecar. (2) 33 instructions / UC_ERR_WRITE_UNMAPPED at 0x101b38 with 2 stub calls was measured before .got/.data were seeded; it is reproduced exactly when POLARIS_FIRMWARE_ROOT is unset and the patches cannot be applied."
     },
     "source_retention_gap": {
       "status": "RESOLVED",
@@ -340,6 +344,22 @@
     "firmware_version": "6.0.0.54.90",
     "patcher_ref": "f344e41/main",
     "libgphoto2_commit": "63a894b0821a510fc40244c5cc4ef84a5220a91c",
-    "load_address": "0x101aac"
+    "load_address": "0x101aac",
+    "memory_patches": [
+      {
+        "address": "0x2f7000",
+        "source_offset": "0x2d7000",
+        "size": "0x674",
+        "section": ".got",
+        "why": "Link-time GOT contents. The fault at 0x101b38 is `str r2,[r3,#0xbc0]` with r3 = [.got+0x628]. That slot holds 0x3787f8, a .bss address, and the ELF carries no dynamic relocation for it (checked .rel.dyn: 39438 relocs, none at 0x2f7628), so the file value is final. Zero-filled, r3 is 0 and the store targets 0xbc0 - unmapped."
+      },
+      {
+        "address": "0x2f7678",
+        "source_offset": "0x2d7678",
+        "size": "0x1a17c",
+        "section": ".data",
+        "why": "Initialised data the function reads through the same pointer chains."
+      }
+    ]
   }
 }

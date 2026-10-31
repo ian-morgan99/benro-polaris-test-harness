@@ -143,7 +143,7 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 |---|---|---|
 | 4 | **PASS** | runs against real `captureBulbImage` bytes with globals seeded; observes exactly one `stopCaptureImageForMessage` |
 | 1–3 | **PARTIAL** | the stop edge is verified; assertions on `close` / `cancel` / `context_cancel` cannot be evaluated — see below |
-| 5–9 | FAIL | run against `stage2_region`, which faults at `0x101b38` after 33 instructions on a store through a pointer derived from a zero-filled global |
+| 5–9 | FAIL | run against `stage2_region`, which executes 71 instructions and reaches six real boundary calls before stopping at `0x101bd0` on `vmov.i32 q8,#0` — see below |
 
 **Why cases 1–3 are PARTIAL, not PASS or FAIL.** Disassembling the 684-byte
 `captureBulbImage` region resolves all 17 BL sites, and none of them is a close,
@@ -159,6 +159,19 @@ evaluated* rather than deleted to get green. PARTIAL means nothing was contradic
 and nothing was verified — it is deliberately not a pass, and `result.passed` is
 False for it.
 
+**Why cases 5–9 cannot pass with this engine.** With `.got`/`.data` seeded from the
+retained binary, `capture_image_with_Bulb` executes 71 instructions and reaches six
+real boundary calls (`waitCameraIdle`, `numOfCaptureImage`, `setCameraStatus`,
+`gp_log`, `HI_LOG_Print`, `sqrt`) before stopping at `0x101bd0` on `vmov.i32 q8,#0`.
+Unicorn 2.1.4's ARM backend raises `UC_ERR_INSN_INVALID` for every VFP/NEON encoding
+regardless of FPU state — verified directly: both `vmov.i32` and `vstr` fault in a
+bare `Uc(UC_ARCH_ARM, UC_MODE_ARM)`, and no CPACR/SCR register is exposed to enable
+the coprocessor. No fixture configuration gets past this point, so the timer,
+callback-ordering, output-publication and manual-dispatch edges those cases assert
+are unreachable. Patching or skipping the NEON block would mutate the artifact under
+test and invalidate the run, so it is recorded as a terminal engine limit in the
+fixture's `observed_behaviour` instead.
+
 **Prerequisite:** cases 1–4 need `POLARIS_FIRMWARE_ROOT` pointing at the directory
 containing the retained `pgphoto.stage2ondisk`. Without it they SKIP — an unmet
 environment prerequisite, deliberately not reported as a behavioural failure:
@@ -167,8 +180,14 @@ environment prerequisite, deliberately not reported as a behavioural failure:
 export POLARIS_FIRMWARE_ROOT=/path/to/extracted_appfs/stage2-ondisk/ondisk
 ```
 
-With it set, `python -m pytest tests/` reports 293 passed and 3 skipped; without
-it, 291 passed and 5 skipped. Both are green.
+`stage2_region` needs the same variable to apply its `.got`/`.data` memory patches.
+Without it the globals stay zero-filled and the run faults at `0x101b38` instead of
+`0x101bd0`, which is a measurement of a different environment, so the two
+integrity tests that compare against recorded behaviour skip rather than compare
+mismatched runs.
+
+With it set, `python -m pytest tests/` reports 298 passed; without it, 294 passed
+and 4 skipped. Both are green.
 
 **Exit codes for `arm-emulate --suite`:**
 
