@@ -60,7 +60,9 @@ The ARM user-space emulation component lives in `src/polaris_harness/arm_emulato
 
 ### What it provides
 
-- `ARMEmulator` — Unicorn-based ARM Thumb CPU emulation with fail-closed hooks
+- `ARMEmulator` — Unicorn-based ARM/Thumb CPU emulation with fail-closed hooks
+  (instruction mode comes from the fixture sidecar, so a real ARM region is not
+  silently decoded as Thumb)
 - `StubRegistry` / `StubProfile` — ABI stubs for camera, libgphoto, OS, timer, callback boundaries
 - `FixtureManager` — Checked-in ARM fixture binaries with SHA-256 integrity verification
 - `ArmEmulationContract` — Machine-readable JSON invocation/result contract
@@ -118,6 +120,7 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 >
 > 1. Run the full ARM emulator test suite: `python -m pytest tests/test_arm_emulator.py -v`
 > 2. Run the ARM lifecycle suite via CLI: `polaris-harness arm-emulate --suite`
+>    (expects exit 3 today — see *Current status* above; only case 4 should PASS)
 > 3. Verify the tiny fixture executes end-to-end: `polaris-harness arm-emulate --fixture tiny_fixture --output /tmp/result.json` and confirm the JSON contract shows `result: "pass"` and `instructions_executed > 0`
 > 4. Run the complete test suite to check for regressions: `python -m pytest tests/ -v`
 > 5. Confirm no imports from `polaris_harness.engine`, `polaris_harness.runtime`, or `polaris_harness.transport` exist inside `src/polaris_harness/arm_emulator/`
@@ -130,6 +133,27 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 - **Bind every run** to binary SHA-256, patcher commit, harness revision, emulator version, stub profile, command
 - **No privileged QEMU**, no host networking/bridge/iptables
 - **Independent component** — no coupling to protocol engine or runtime verifier
+
+### Current status (read before testing)
+
+`arm-emulate --suite` currently exits **3**. That is expected, not a regression:
+
+| case | status | why |
+|---|---|---|
+| 4 | **PASS** | runs against real `captureBulbImage` bytes with globals seeded; observes exactly one `stopCaptureImageForMessage` |
+| 1–3 | FAIL | assert on `close` / `cancel` / `context_cancel`, none of which exist in that function. The harness reports the unsatisfiable assertion rather than implying a firmware regression |
+| 5–9 | FAIL | run against `stage2_region`, which is pinned but not yet seeded — it faults after 33 instructions |
+
+**Prerequisite:** cases 1–4 need `POLARIS_FIRMWARE_ROOT` pointing at the directory
+containing the retained `pgphoto.stage2ondisk`. Without it they SKIP — an unmet
+environment prerequisite, deliberately not reported as a behavioural failure:
+
+```bash
+export POLARIS_FIRMWARE_ROOT=/path/to/extracted_appfs/stage2-ondisk/ondisk
+```
+
+With it set, `python -m pytest tests/` reports 287 passed; without it, 285 passed
+and 2 skipped. Both are green.
 
 ## Astro WebUI (Issue #20) — Agent Usage Guide
 
@@ -184,6 +208,95 @@ When asking another agent to test a fix to the Astro WebUI component, provide th
 - **No Benro Connect APK or decompiled assets** in the public harness
 - **Rate control remains explicitly unavailable** unless a separately qualified contract is supplied
 - **All scenarios labelled `source: synthetic`** — never presented as observed camera behaviour
+- **Independent component** — no coupling to protocol engine or runtime verifier
+
+## SD Card Emulation — Agent Usage Guide
+
+Emulates a Benro-shaped FAT32 SD card and runs the firmware-update flow against
+it. No device contact: nothing is mounted, flashed, or rebooted.
+
+### What it provides
+
+- **`sd_emulator.image.SDCardImage`** — sparse-backed FAT32 volume (boot sector,
+  FSINFO, backup boot sector, LFN entries, cluster chains). Sectors live in a
+  dict, so a 32 GiB card costs only the sectors actually written.
+- **`sd_emulator.packet.FirmwarePacket`** — parses `FwPkt.zip` / `OmsPkt.zip`,
+  verifies every component against `firmwareInfo`, and compares dotted versions
+  numerically.
+- **`sd_emulator.device.SimulatedDevice`** — the update flow with every failure
+  path reported as a distinct outcome.
+- **`sd_emulator.builder.build_benro_card`** — one place that knows what a Benro
+  card looks like, shared by tests and the CLI.
+
+### How other agents should use it
+
+```bash
+# Inspect the card shape
+python -m polaris_harness.cli sd-emulate --list
+
+# Run an update against a real packet (verified working: 89 MB in ~1 s)
+python -m polaris_harness.cli sd-emulate \
+    --packet /path/to/FwPkt.zip --current-version 4.0.0.32 --verbose
+
+# Reproduce the both-packets-present condition seen on a real card
+python -m polaris_harness.cli sd-emulate \
+    --packet FwPkt.zip --oms-packet OmsPkt.zip
+
+# Machine-readable report
+python -m polaris_harness.cli sd-emulate --packet FwPkt.zip --output report.json
+```
+
+```python
+from polaris_harness.sd_emulator import build_benro_card, run_update
+
+card = build_benro_card(total_bytes=64 * 1024 * 1024,
+                        packets=[("FwPkt.zip", payload)])
+report = run_update(card, current_version="4.0.0.32")
+assert report.succeeded and report.installed_version == "6.0.0.54.90"
+```
+
+### Exit codes
+
+| code | meaning |
+|---|---|
+| 0 | update succeeded, or `--list` |
+| 2 | setup problem: missing file, packet not named `FwPkt.zip`/`OmsPkt.zip`, no packet on card, both packets present |
+| 3 | behavioural rejection: version rejected, write failure |
+
+Code 2 and 3 are deliberately distinguishable: a setup problem is not evidence
+about device behaviour.
+
+### What is evidence-grounded vs synthetic
+
+Grounded in retained artefacts:
+- card layout (mode directories `normal`, `focusStack`, `panorama`, `Lapse`,
+  `sun`, `HDR`, `starskyStack`; `system/log/{Mlog,Clog,access,error}_NNNNNN.log`)
+- packet layout and the `firmwareInfo` `<name> size:<n>;<name> MD5:<hex>;` format
+- NAND partition map from `FwPkt/camera/config` `mtdparts` (asserted against that
+  file by a test)
+- mount point `/app/sd`, seen in Mlog
+
+Synthetic:
+- packet *contents* in tests — real layout, real sizes, fabricated bytes. No
+  proprietary firmware is committed.
+- log file contents — names and location are real; bodies are placeholders.
+
+### Two deliberate refusals (not bugs)
+
+- **Both packets present → `ambiguous-packets`.** A retained snapshot held both
+  `FwPkt.zip` and `OmsPkt.zip`, and a later capture had `OmsPkt.zip` removed.
+  Nothing in the evidence records which the device prefers, so guessing would
+  make a simulated result look like verified device behaviour.
+- **Downgrades refused by default.** The device's downgrade policy is not
+  recorded. Pass `--allow-downgrade` / `allow_downgrade=True` to override.
+
+### Key constraints
+
+- **Never claims device behaviour** for the two refusals above
+- **MD5 is reproduced, not recommended** — it is what `firmwareInfo` declares, so
+  the emulator checks exactly what the camera checks. SHA-256 is recorded
+  separately for harness provenance.
+- **No absolute host paths** in reports or committed sidecars
 - **Independent component** — no coupling to protocol engine or runtime verifier
 
 ## What this project is NOT
