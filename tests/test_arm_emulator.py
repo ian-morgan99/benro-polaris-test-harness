@@ -66,6 +66,39 @@ class TestFixtureIntegrity:
         placeholder = FIXTURES_DIR / "stage2_region.bin.placeholder"
         assert placeholder.exists(), f"Stage-2 region placeholder not found: {placeholder}"
 
+    def test_stage2_region_provenance_populated(self):
+        """Stage-2 region placeholder provenance must be populated (not TBD)."""
+        placeholder = FIXTURES_DIR / "stage2_region.bin.placeholder"
+        assert placeholder.exists()
+        content = placeholder.read_text()
+        # Provenance fields must be populated, not TBD
+        assert "23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3" in content
+        assert "0x101aac" in content
+        assert "2176" in content
+        assert "arm" in content.lower()
+        # TBD should not appear in provenance value fields
+        lines = content.split("\n")
+        for line in lines:
+            if "|" in line and any(kw in line.lower() for kw in ["sha", "address", "size", "mode"]):
+                assert "TBD" not in line, f"Provenance field still TBD: {line.strip()}"
+
+    def test_stage2_region_not_checked_in(self):
+        """Stage-2 region binary must NOT be checked in (placeholder only)."""
+        bin_path = FIXTURES_DIR / "stage2_region.bin"
+        assert not bin_path.exists(), (
+            f"Stage-2 region binary should not be checked in: {bin_path}"
+        )
+
+    def test_fixture_manager_rejects_mismatched_sha(self):
+        """FixtureManager must fail closed on SHA-256 mismatch."""
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("tiny_fixture")
+        assert fixture is not None
+        # Wrong SHA should fail verification
+        assert not manager.verify_fixture("tiny_fixture", "0" * 64)
+        # Correct SHA should pass
+        assert manager.verify_fixture("tiny_fixture", fixture.sha256)
+
     def test_stub_call_fixture_exists(self):
         """Stub-call fixture binary must exist."""
         fixture_path = FIXTURES_DIR / "stub_call_fixture.bin"
@@ -214,6 +247,142 @@ class TestUnsupportedInstruction:
         )
         assert result.exit_code == 1
         assert result.unsupported_instruction_address is not None
+
+
+class TestArmMode:
+    """Test ARM (not Thumb) instruction mode support (issue #16)."""
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+        self.fixture_path = FIXTURES_DIR / "arm_mode_fixture.bin"
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def test_arm_mode_fixture_executes(self):
+        """ARM mode fixture should execute end-to-end in ARM mode."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="arm_mode_test",
+            mode="arm",
+        )
+        emulator = ARMEmulator(config)
+
+        result = emulator.run()
+
+        assert result.result == EmulationResult.PASS, (
+            f"Expected PASS, got {result.result}: {result.error_message}"
+        )
+        assert result.exit_code == 0
+        assert result.instructions_executed > 0, "No instructions executed"
+        assert result.mode == "arm"
+        assert result.final_registers.get("R0") == 1, (
+            f"Expected R0=1, got {result.final_registers.get('R0')}"
+        )
+
+    def test_arm_binary_in_thumb_mode_fails_closed(self):
+        """An ARM binary run in Thumb mode should fail closed or produce
+        clearly wrong results (not silently correct)."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="arm_in_thumb_mode",
+            mode="thumb",
+        )
+        emulator = ARMEmulator(config)
+
+        result = emulator.run()
+
+        # ARM instructions decoded as Thumb may execute but produce wrong results.
+        # The key is that R0 should NOT be 1 (the ARM MOV R0,#1 didn't execute
+        # as intended in Thumb mode).
+        assert result.exit_code != 0 or result.final_registers.get("R0") != 1, (
+            f"ARM binary in Thumb mode should not produce correct results, "
+            f"got R0={result.final_registers.get('R0')}"
+        )
+
+
+class TestInvalidMode:
+    """Test that unknown instruction modes fail closed at construction."""
+
+    def test_invalid_mode_raises(self):
+        """Creating an emulator with an invalid mode should raise ValueError."""
+        config = EmulationConfig(
+            binary_path=FIXTURES_DIR / "tiny_fixture.bin",
+            binary_sha256=hashlib.sha256(
+                (FIXTURES_DIR / "tiny_fixture.bin").read_bytes()
+            ).hexdigest(),
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="invalid_mode_test",
+            mode="invalid_mode",
+        )
+
+        with pytest.raises(ValueError, match="Invalid instruction mode"):
+            ARMEmulator(config)
+
+
+class TestAAPCSMarshaling:
+    """Test AAPCS argument/return marshaling between emulated code and stubs (issue #17)."""
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+        self.fixture_path = FIXTURES_DIR / "aapcs_fixture.bin"
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def test_aapcs_stub_entry_receives_r0_r3(self):
+        """Stub entry should receive R0-R3 as arguments per AAPCS."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="aapcs_test",
+            mode="arm",
+            entry_address=4096,
+        )
+        emulator = ARMEmulator(config)
+
+        captured_args = {}
+
+        def camera_stub(function_name, arguments, register_snapshot):
+            captured_args["args"] = list(arguments)
+            captured_args["regs"] = dict(register_snapshot)
+            return 99  # Return value should go back to R0
+
+        # Register stub first, then its entry address
+        emulator.register_stub("camera", camera_stub)
+        emulator.register_stub_entry("camera", 0x2000)
+
+        result = emulator.run()
+
+        assert result.result == EmulationResult.PASS, (
+            f"Expected PASS, got {result.result}: {result.error_message}"
+        )
+        assert result.exit_code == 0
+
+        # Stub should have been called with R0=42, R1=100
+        assert "args" in captured_args, "Stub was not called"
+        args = captured_args["args"]
+        assert len(args) >= 2, f"Expected at least 2 args, got {len(args)}"
+        assert args[0] == 42, f"Expected R0=42, got args[0]={args[0]}"
+        assert args[1] == 100, f"Expected R1=100, got args[1]={args[1]}"
+
+        # Return value should be written back to R0
+        assert result.final_registers.get("R0") == 99, (
+            f"Expected R0=99 (stub return), got {result.final_registers.get('R0')}"
+        )
 
 
 class TestFixtureManager:

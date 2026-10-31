@@ -1,0 +1,20 @@
+{
+  "description": "ARM mode fixture: MOV R0, #42; MOV R1, #100; BL stub_entry; BX LR. Tests AAPCS argument marshaling (R0-R3 passed to stub).",
+  "source_issue": "ian-morgan99/benro-polaris-test-harness#17",
+  "provenance": {
+    "type": "synthetic",
+    "architecture": "ARM",
+    "mode": "arm",
+    "instructions": [
+      {"mnemonic": "MOV R0, #42", "encoding": "0xE3A0002A"},
+      {"mnemonic": "MOV R1, #100", "encoding": "0xE3A01064"},
+      {"mnemonic": "BL stub_entry", "encoding": "0xEB0003FC"},
+      {"mnemonic": "BX LR", "encoding": "0xE12FFF1E"}
+    ],
+    "entry_address": 4096,
+    "stub_entry_address": 8192,
+    "expected_registers": {"R0": 42, "R1": 100},
+    "expected_stub_arguments": [42, 100, 0, 0],
+    "expected_exit_code": 0
+  }
+}
