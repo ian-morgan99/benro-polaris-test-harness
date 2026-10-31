@@ -92,20 +92,46 @@ Boundary aliases recorded in the sidecar: `stop` and `message_stop` both map to
 `stopCaptureImageForMessage`. There is no counterpart to `context_cancel` or
 `close` in this function.
 
-## Current limitation (recorded, not hidden)
+## Global seeding (required)
 
-Measured with the committed sidecar config: **84 instructions, 10 boundary
-calls** (including `capture_image_with_Bulb`), then
-`UC_ERR_READ_UNMAPPED` at `0x20750`. The preceding `ldr r3, [r4, r3]` loads a
-`.rodata` string address and the code dereferences it as a pointer, which only
-makes sense with the real global contents and a populated caller frame.
+Run without seeding: **84 instructions, 10 boundary calls**, then
+`UC_ERR_READ_UNMAPPED` at `0x20750`. The preceding sequence is
 
-`stopCaptureImageForMessage` is called at `0x207e8`, **beyond** that fault. So
-the stop edge is present in this region but not reachable by straight-line
-execution yet. Closing the gap needs:
+```
+ldr  r3, [pc, #0x26c]   ; literal -> delta
+add  r3, pc, r3         ; r3 = 0x564
+ldr  r3, [r4, r3]       ; r4 = 0x2f7000 (.got) -> *(.got+0x564) = 0x3787dc
+ldr  r3, [r3]           ; dereference that .bss address -> fault when zero-filled
+```
 
-1. the referenced `.rodata`/`.data` words mapped with their real contents, and
-2. AAPCS argument setup for `captureBulbImage`'s parameters.
+`.got+0x564` holds `0x3787dc`, a `.bss` address with **no dynamic relocation**,
+so the file value is final. Zero-filled, the last load dereferences 0.
 
-Until then, cases 1–4 report the edge as unreachable rather than absent — see
-the per-case note naming the call site and fault address.
+The sidecar therefore declares:
+
+| field | value |
+|---|---|
+| `code_address` / `code_size` | `0x20000` / `0x35d000` — one mapping from `.text` through `.bss` end (`0x37cea4`) |
+| `memory_patches[0]` | `.got`: vaddr `0x2f7000`, file offset `0x2d7000`, size `0x674` |
+| `memory_patches[1]` | `.data`: vaddr `0x2f7678`, file offset `0x2d7678`, size `0x1a17c` |
+| `.bss` | deliberately left zero-filled — that is what a real process gives it |
+
+A single mapping is required: Unicorn cannot map a range straddling an already
+mapped page. Both patched ranges sit inside the code mapping, so they are
+patched in place rather than mapped.
+
+Source bytes come from `POLARIS_FIRMWARE_ROOT`, resolved by basename and
+verified against `source_binary_sha256` before use. No absolute host path is
+recorded in the sidecar. Without that variable the lifecycle cases SKIP — an
+unmet prerequisite, not a behavioural failure.
+
+## Measured behaviour with seeding
+
+**PASS — 154 instructions, 17 stub calls**, function returns normally. Every BL
+site reaches its stub, including `stopCaptureImageForMessage` exactly once.
+
+Lifecycle case 4 (stop failure preserving the primary error) now **passes**
+against this artifact. Cases 1–3 still fail, and correctly so: they assert on
+`close`, `cancel` and `context_cancel`, none of which exist in this function —
+the harness reports that as an unsatisfiable assertion rather than a firmware
+regression.

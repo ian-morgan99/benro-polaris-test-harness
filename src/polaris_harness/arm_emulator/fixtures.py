@@ -21,11 +21,12 @@ and provenance tracking. Fixtures are never mutated.
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .emulator import EmulationConfig
+from .emulator import DataRegion, EmulationConfig, MemoryPatch
 
 
 @dataclass
@@ -61,6 +62,12 @@ class FixtureMetadata:
     # {"stop": "stopCaptureImageForMessage"}. Lets a case written against a
     # generic vocabulary match the binary's actual boundary names.
     boundary_aliases: Dict[str, str] = field(default_factory=dict)
+    # Environment the artifact expects but that lies outside the extracted
+    # window. Both are described relative to the retained source binary so no
+    # machine-specific path is committed.
+    data_regions: List[Dict[str, Any]] = field(default_factory=list)
+    memory_patches: List[Dict[str, Any]] = field(default_factory=list)
+    entry_arguments: List[int] = field(default_factory=list)
 
 
 class FixtureManager:
@@ -95,6 +102,9 @@ class FixtureManager:
             expected_sha256 = None
             stub_entries: List[Dict[str, Any]] = []
             boundary_aliases: Dict[str, str] = {}
+            data_regions: List[Dict[str, Any]] = []
+            memory_patches: List[Dict[str, Any]] = []
+            entry_arguments: List[int] = []
 
             if meta_file.exists():
                 try:
@@ -122,6 +132,19 @@ class FixtureManager:
                             for k, v in aliases.items()
                             if isinstance(k, str) and isinstance(v, str)
                         }
+                    regions = prov.get("data_regions", [])
+                    if isinstance(regions, list):
+                        data_regions = [r for r in regions if isinstance(r, dict)]
+                    patches = prov.get("memory_patches", [])
+                    if isinstance(patches, list):
+                        memory_patches = [p for p in patches if isinstance(p, dict)]
+                    args = prov.get("entry_arguments", [])
+                    if isinstance(args, list):
+                        entry_arguments = [
+                            coerced for coerced in
+                            (self._coerce_int(a) for a in args)
+                            if coerced is not None
+                        ]
                     recorded = prov.get("region_sha256") or prov.get("sha256")
                     if isinstance(recorded, str) and recorded.strip():
                         expected_sha256 = recorded.strip().lower()
@@ -145,6 +168,9 @@ class FixtureManager:
                 expected_sha256=expected_sha256,
                 stub_entries=stub_entries,
                 boundary_aliases=boundary_aliases,
+                data_regions=data_regions,
+                memory_patches=memory_patches,
+                entry_arguments=entry_arguments,
             )
 
     @staticmethod
@@ -234,6 +260,7 @@ class FixtureManager:
         command: str,
         entry_address: Optional[int] = None,
         mode: Optional[str] = None,
+        apply_sidecar_environment: bool = True,
         **kwargs,
     ) -> EmulationConfig:
         """Create an EmulationConfig from a fixture.
@@ -252,6 +279,10 @@ class FixtureManager:
             command: Command being emulated
             entry_address: Override for the entry point address
             mode: Override for the instruction mode ("arm" or "thumb")
+            apply_sidecar_environment: When true, the sidecar's data_regions and
+                memory_patches are resolved against the retained source binary
+                and applied. Set false to reproduce a run without global seeding
+                (the fault that seeding removes) without needing that binary.
             **kwargs: Additional EmulationConfig overrides
 
         Returns:
@@ -321,7 +352,148 @@ class FixtureManager:
             if hasattr(config, key):
                 setattr(config, key, value)
 
+        # Seed the environment the artifact expects but that lies outside the
+        # extracted window. Done after overrides so an explicit caller can still
+        # replace the whole list. Skipped when apply_sidecar_environment is
+        # false, which lets a caller deliberately reproduce the unseeded run.
+        if apply_sidecar_environment:
+            if not config.data_regions and fixture.data_regions:
+                config.data_regions = self._build_data_regions(fixture)
+            if not config.memory_patches and fixture.memory_patches:
+                config.memory_patches = self._build_memory_patches(fixture)
+        if not config.entry_arguments and fixture.entry_arguments:
+            config.entry_arguments = list(fixture.entry_arguments)
+
         return config
+
+    def source_binary_available(self, name: str) -> tuple:
+        """Whether a fixture's retained source binary can be located.
+
+        Non-raising counterpart to _resolve_source_binary. A fixture that needs
+        global seeding is unusable without the retained source, and that is an
+        unmet environment prerequisite - the same class of condition as a
+        missing proprietary blob - so callers report it as a skip.
+
+        Args:
+            name: Fixture name
+
+        Returns:
+            (available, reason) where reason explains the negative case
+        """
+        fixture = self.get_fixture(name)
+        if fixture is None:
+            return False, f"fixture {name} not found"
+        if not fixture.memory_patches and not fixture.data_regions:
+            return True, ""
+        try:
+            self._resolve_source_binary(fixture)
+            return True, ""
+        except ValueError as exc:
+            return False, str(exc)
+
+    def _resolve_source_binary(self, fixture: FixtureMetadata) -> Path:
+        """Locate the retained source binary a fixture was extracted from.
+
+        Sidecars record only a basename plus its SHA-256, never an absolute
+        path, so a committed file cannot leak or depend on one host's layout.
+        The location comes from POLARIS_FIRMWARE_ROOT.
+
+        Args:
+            fixture: Fixture whose provenance names the source binary
+
+        Returns:
+            Path to the retained source binary
+
+        Raises:
+            ValueError: If it cannot be located, or does not match its recorded
+                hash. Silently proceeding would leave globals zero-filled and
+                reproduce the exact fault the patches exist to remove.
+        """
+        prov = fixture.provenance if isinstance(fixture.provenance, dict) else {}
+        name = prov.get("source_binary_name") or "pgphoto.stage2ondisk"
+        expected = prov.get("source_binary_sha256")
+
+        root = os.environ.get("POLARIS_FIRMWARE_ROOT")
+        if not root:
+            raise ValueError(
+                f"fixture {fixture.name} needs its source binary ({name}) to "
+                f"seed global contents, but POLARIS_FIRMWARE_ROOT is not set. "
+                f"Point it at the directory containing the retained "
+                f"{name} from the private research repo."
+            )
+        candidate = Path(root) / name
+        if not candidate.exists():
+            raise ValueError(
+                f"fixture {fixture.name}: source binary {candidate} "
+                f"(POLARIS_FIRMWARE_ROOT) does not exist."
+            )
+        if expected:
+            actual = self._compute_sha256(candidate)
+            if actual != str(expected).lower():
+                raise ValueError(
+                    f"fixture {fixture.name}: source binary {candidate} has "
+                    f"SHA-256 {actual}, recorded {expected}. Seeding from a "
+                    f"different build would produce results that do not "
+                    f"describe this artifact."
+                )
+        return candidate
+
+    def _build_data_regions(self, fixture: FixtureMetadata) -> List[Any]:
+        """Turn sidecar data_regions into emulator DataRegion objects.
+
+        Args:
+            fixture: Fixture declaring the regions
+
+        Returns:
+            DataRegion instances with source paths resolved
+        """
+        built = []
+        for spec in fixture.data_regions:
+            address = self._coerce_int(spec.get("address"))
+            size = self._coerce_int(spec.get("size"))
+            if address is None or size is None:
+                raise ValueError(
+                    f"fixture {fixture.name} declares a data region with a "
+                    f"missing address/size: {spec!r}"
+                )
+            source = None
+            if spec.get("source") == "retained_binary":
+                source = self._resolve_source_binary(fixture)
+            built.append(DataRegion(
+                address=address,
+                size=size,
+                source_path=source,
+                source_offset=self._coerce_int(spec.get("source_offset")) or 0,
+                dest_offset=self._coerce_int(spec.get("dest_offset")) or 0,
+                fill=self._coerce_int(spec.get("fill")) or 0,
+            ))
+        return built
+
+    def _build_memory_patches(self, fixture: FixtureMetadata) -> List[Any]:
+        """Turn sidecar memory_patches into emulator MemoryPatch objects.
+
+        Args:
+            fixture: Fixture declaring the patches
+
+        Returns:
+            MemoryPatch instances with source paths resolved
+        """
+        source = self._resolve_source_binary(fixture)
+        built = []
+        for spec in fixture.memory_patches:
+            address = self._coerce_int(spec.get("address"))
+            size = self._coerce_int(spec.get("size"))
+            offset = self._coerce_int(spec.get("source_offset"))
+            if address is None or size is None or offset is None:
+                raise ValueError(
+                    f"fixture {fixture.name} declares a memory patch with a "
+                    f"missing address/size/source_offset: {spec!r}"
+                )
+            built.append(MemoryPatch(
+                address=address, source_path=source,
+                source_offset=offset, size=size,
+            ))
+        return built
 
     def read_binary(self, name: str) -> bytes:
         """Read a fixture binary's contents (read-only).

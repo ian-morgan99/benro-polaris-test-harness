@@ -243,6 +243,35 @@ class LifecycleScenario:
         alias = self._boundary_aliases.get(expected)
         return bool(alias is not None and alias == recorded)
 
+    def _idealise(self, recorded: Any) -> Any:
+        """Map a recorded symbol back to the idealised boundary name.
+
+        Stub handlers are written against the case's vocabulary ("stop",
+        "cancel"), but once a fixture records real call sites the name arriving
+        at the handler is the firmware symbol (stopCaptureImageForMessage).
+        Without this mapping a handler's ``function_name == "stop"`` test never
+        fires, its scripted return value is silently dropped, and an assertion
+        about error propagation reports the default instead - which looks like a
+        finding about the firmware rather than a harness bug.
+
+        Prefers a name the case actually asserts on, so two idealised names
+        aliasing one symbol (stop and message_stop) resolve predictably.
+
+        Args:
+            recorded: function_name recorded for the stub call
+
+        Returns:
+            The idealised name, or the recorded name when it has no alias
+        """
+        preferred = [n for n in self.expected_boundary_functions
+                     if self._boundary_aliases.get(n) == recorded]
+        if preferred:
+            return preferred[0]
+        for name, alias in self._boundary_aliases.items():
+            if alias == recorded:
+                return name
+        return recorded
+
     def _declares_boundary(self, fixture: Any, expected: str) -> bool:
         """Whether a fixture's sidecar declares the asserted boundary.
 
@@ -363,6 +392,22 @@ class LifecycleScenario:
         self._active_fixture = fixture
         self._boundary_aliases = dict(fixture.boundary_aliases)
 
+        # SKIP when the fixture needs global seeding but the retained source
+        # binary cannot be located. Without it the run faults on its first
+        # pointer chase and every assertion reports "not observed", which reads
+        # as a patcher regression when the real cause is an unset environment
+        # variable. Same class of condition as a missing proprietary blob.
+        available, reason = self.fixture_manager.source_binary_available(
+            self.fixture_name)
+        if not available:
+            return LifecycleTestResult(
+                case=self.case,
+                passed=False,
+                skipped=True,
+                skip_reason=reason,
+                fixture_name=self.fixture_name,
+            )
+
         # SKIP when the fixture declares no stub entries. Every lifecycle case
         # asserts on boundary events (stop/close/cancel/timer/callback), and
         # those events can only be observed if the region's external call
@@ -477,9 +522,10 @@ class Case1NormalBulbCompletion(LifecycleScenario):
 
         def counting_camera(function_name: str, arguments: List[Any],
                             register_snapshot: Dict[str, int]) -> Any:
-            if function_name == "stop":
+            name = self._idealise(function_name)
+            if name == "stop":
                 self._stop_count += 1
-            elif function_name == "close":
+            elif name == "close":
                 self._close_count += 1
             return default_camera_stub(function_name, arguments, register_snapshot)
 
@@ -525,9 +571,12 @@ class Case2MessageStopVsContextCancel(LifecycleScenario):
 
         def distinguishing_camera(function_name: str, arguments: List[Any],
                                   register_snapshot: Dict[str, int]) -> Any:
-            if function_name == "message_stop":
+            # Resolve the recorded symbol to the case's vocabulary first; see
+            # _idealise for why this matters.
+            name = self._idealise(function_name)
+            if name == "message_stop":
                 self._message_stop_calls += 1
-            elif function_name == "context_cancel":
+            elif name == "context_cancel":
                 self._context_cancel_calls += 1
             return default_camera_stub(function_name, arguments, register_snapshot)
 
@@ -571,10 +620,11 @@ class Case3CancelResultSurvivesStop(LifecycleScenario):
 
         def tracking_camera(function_name: str, arguments: List[Any],
                             register_snapshot: Dict[str, int]) -> Any:
-            if function_name == "stop":
+            name = self._idealise(function_name)
+            if name == "stop":
                 self._stop_succeeded = True
                 return 0  # Stop succeeds
-            elif function_name == "cancel":
+            elif name == "cancel":
                 # Cancel result should survive even though stop succeeded
                 self._cancel_result_preserved = True
                 return -1  # Cancel returns error
@@ -614,7 +664,8 @@ class Case4StopFailurePreservesPrimaryError(LifecycleScenario):
 
         def failing_stop_camera(function_name: str, arguments: List[Any],
                                 register_snapshot: Dict[str, int]) -> Any:
-            if function_name == "stop":
+            name = self._idealise(function_name)
+            if name == "stop":
                 return -5  # Stop fails with error code -5
             return default_camera_stub(function_name, arguments, register_snapshot)
 

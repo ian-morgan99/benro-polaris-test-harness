@@ -20,9 +20,9 @@
     "entry_address": "0x20604",
     "load_address": "0x20604",
     "code_address": "0x20000",
-    "code_size": 3145728,
+    "code_size": 3526656,
     "max_instructions": 5000,
-    "layout_note": "Same constraint as stage2_region: the function resolves globals with ldr rN,[pc,#imm] + add rN,pc,rN, so it must load at its original vaddr. code_address/code_size map a page-aligned range covering the blob and its referenced globals (.rodata 0x25cfb0/0x25d070, .dynamic 0x2f6ffc).",
+    "layout_note": "Load at the original vaddr 0x20604: the function resolves globals with ldr rN,[pc,#imm] + add rN,pc,rN, whose literal-pool words are PC-relative deltas. code_address 0x20000 / code_size 0x35d000 map one range from .text through the end of .bss (0x37cea4 -> 0x37d000), because the function's pointer chains walk .got into .bss. A single mapping is required: Unicorn cannot map a range that straddles an already-mapped page.",
     "stub_entries": [
       {
         "address": "0x20630",
@@ -152,21 +152,36 @@
     "boundary_aliases_note": "The lifecycle cases assert on an idealised vocabulary. In this binary the message-driven stop edge is implemented by stopCaptureImageForMessage (0x202e4), called from captureBulbImage at 0x207e8. context_cancel has no counterpart here; gp_context_cancel (0x358d0) is libgphoto-internal with 27 call sites, none in this function.",
     "observed_behaviour": {
       "mode": "arm",
-      "instructions_executed": 84,
-      "result": "unsupported_instruction",
-      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED)",
-      "fault_address": "0x20750",
-      "stub_calls_recorded": 10,
-      "stub_calls_seen": [
-        "getValueWithSeetingsForKey",
-        "getSettingsValueForKey",
-        "pthread_cond_signal",
-        "qsort",
-        "textdomain",
-        "capture_image_with_Bulb"
-      ],
-      "interpretation": "Execution reaches 10 real boundary calls including capture_image_with_Bulb, then faults at 0x20750 on ldr r3,[r3]: the preceding ldr r3,[r4,r3] loads a .rodata string address (e.g. 0x25cfb0) and the code dereferences it as a pointer, which only makes sense with the real global contents and a populated caller frame. stopCaptureImageForMessage at 0x207e8 lies beyond that fault, so the stop edge is present in this region but not yet reachable by straight-line execution.",
-      "reachability_gap": "Reaching 0x207e8 needs (a) the referenced .rodata/.data words mapped with their real contents and (b) AAPCS argument setup for captureBulbImage's parameters. Neither is in scope for this fixture; both are recorded here so the gap is explicit rather than silently green."
-    }
+      "instructions_executed": 154,
+      "result": "pass",
+      "stub_calls_recorded": 17,
+      "boundary_calls_seen": {
+        "stopCaptureImageForMessage": 1,
+        "capture_image_with_Bulb": 1,
+        "checkCameraStatus": 1,
+        "camera_preview_enable": 1,
+        "sp_async_thread_function": 1
+      },
+      "interpretation": "With .got and .data seeded from the retained binary and .bss mapped zero-filled, captureBulbImage runs to completion: 154 instructions, all 17 BL sites reached their stubs, and it returns normally. This is the first run of this artifact that executes the whole function rather than faulting partway.",
+      "superseded": "An earlier revision recorded 84 instructions / 10 calls / UC_ERR_READ_UNMAPPED at 0x20750. That was without global seeding; the fault was a zero-filled .got entry, not missing behaviour."
+    },
+    "source_binary_name": "pgphoto.stage2ondisk",
+    "memory_patches": [
+      {
+        "address": "0x2f7000",
+        "source_offset": "0x2d7000",
+        "size": "0x674",
+        "section": ".got",
+        "why": "Link-time GOT contents. The fault at 0x20750 was ldr r3,[r3] with r3 derived from [r4+0x564], i.e. .got+0x564, which holds 0x3787dc - a .bss address with no dynamic relocation, so the file value is final. Zero-filled, that load dereferences 0."
+      },
+      {
+        "address": "0x2f7678",
+        "source_offset": "0x2d7678",
+        "size": "0x1a17c",
+        "section": ".data",
+        "why": "Initialised data the function reads through the same pointer chains."
+      }
+    ],
+    "memory_patches_note": "Both ranges lie inside the code mapping, so they are patched in place rather than mapped. .bss is deliberately left zero-filled: that is what a real process gives it. Sources are resolved from POLARIS_FIRMWARE_ROOT by basename and verified against source_binary_sha256 before use; no absolute host path is recorded here."
   }
 }

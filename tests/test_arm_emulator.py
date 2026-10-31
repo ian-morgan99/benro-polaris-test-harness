@@ -323,11 +323,83 @@ class TestFixtureIntegrity:
             "message_stop") == "stopCaptureImageForMessage"
 
     def test_capture_bulb_region_reaches_boundary_calls(self):
-        """Region must execute real ARM code and reach boundary calls.
+        """Region must execute end to end and reach its boundary calls.
 
-        Pins the current measured behaviour: 84 instructions, 10 stub calls,
-        then an unmapped read at 0x20750. The stop call site sits beyond that
-        fault, so this asserts progress without pretending the edge works.
+        With .got/.data seeded from the retained binary and .bss mapped
+        zero-filled, captureBulbImage runs to completion: 154 instructions, all
+        17 BL sites reaching their stubs, including exactly one
+        stopCaptureImageForMessage. This is the first run of this artifact that
+        executes the whole function rather than faulting partway.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("capture_bulb_image_region")
+        if fixture is None:
+            pytest.skip("capture_bulb_image_region.bin not supplied locally")
+        available, reason = manager.source_binary_available(
+            "capture_bulb_image_region")
+        if not available:
+            pytest.skip(reason)
+
+        config = manager.to_emulation_config(
+            "capture_bulb_image_region",
+            patcher_commit="f344e41",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            stub_profile="lifecycle",
+            command="captureBulbImage",
+        )
+        assert config.mode == "arm"
+        assert config.load_address == 0x20604
+        assert len(config.memory_patches) == 2, (
+            "sidecar must declare the .got and .data patches; without them the "
+            "run faults on a zero-filled GOT entry"
+        )
+
+        emulator = ARMEmulator(config)
+        emulator.apply_stub_profile(create_default_profile())
+        for entry in fixture.stub_entries:
+            emulator.register_stub_entry(
+                entry["stub_name"],
+                int(entry["address"], 0),
+                function_name=entry["function_name"],
+                model=entry.get("model", "call-site"),
+            )
+        result = emulator.run()
+
+        assert result.result == EmulationResult.PASS, (
+            f"seeded run must execute the whole function; got "
+            f"{result.result.value}: {result.error_message}"
+        )
+        assert result.instructions_executed == 154
+        assert len(result.stub_calls) == 17, (
+            "every BL site in the region should reach its stub"
+        )
+        called = [c.function_name for c in result.stub_calls]
+        assert called.count("stopCaptureImageForMessage") == 1, (
+            "the message-driven stop edge must be observed exactly once"
+        )
+        assert called.count("capture_image_with_Bulb") == 1
+
+        # Deterministic across runs.
+        again = ARMEmulator(config)
+        again.apply_stub_profile(create_default_profile())
+        for entry in fixture.stub_entries:
+            again.register_stub_entry(
+                entry["stub_name"], int(entry["address"], 0),
+                function_name=entry["function_name"],
+                model=entry.get("model", "call-site"))
+        second = again.run()
+        assert second.instructions_executed == result.instructions_executed
+        assert len(second.stub_calls) == len(result.stub_calls)
+
+    def test_capture_bulb_region_without_seeding_faults_on_got(self):
+        """Without global seeding the run must fault, not silently pass.
+
+        Pins why the patches exist: the region dereferences a .got entry that is
+        zero-filled unless seeded from the retained binary, and executing with
+        zeros produces a fault at 0x20750. If a future change made that run look
+        successful it would mean the environment was fabricated rather than
+        reproduced.
         """
         manager = FixtureManager(FIXTURES_DIR)
         fixture = manager.get_fixture("capture_bulb_image_region")
@@ -341,41 +413,30 @@ class TestFixtureIntegrity:
             emulator_version="unicorn-2.1.4",
             stub_profile="lifecycle",
             command="captureBulbImage",
+            apply_sidecar_environment=False,
         )
-        assert config.mode == "arm"
-        assert config.load_address == 0x20604
+        assert not config.memory_patches, (
+            "apply_sidecar_environment=False must skip global seeding"
+        )
 
         emulator = ARMEmulator(config)
         emulator.apply_stub_profile(create_default_profile())
         for entry in fixture.stub_entries:
             emulator.register_stub_entry(
-                entry["stub_name"],
-                int(entry["address"], 0),
-                function_name=entry["function_name"],
-                model=entry.get("model", "call-site"),
-            )
-        result = emulator.run()
-
-        assert result.instructions_executed == 84
-        assert len(result.stub_calls) == 10
-        called = {c.function_name for c in result.stub_calls}
-        assert "capture_image_with_Bulb" in called, (
-            "the region's own capture call must be observed as a boundary event"
-        )
-        assert result.result != EmulationResult.PASS
-        assert result.unsupported_instruction_address == 0x20750
-
-        # Deterministic across runs.
-        again = ARMEmulator(config)
-        again.apply_stub_profile(create_default_profile())
-        for entry in fixture.stub_entries:
-            again.register_stub_entry(
                 entry["stub_name"], int(entry["address"], 0),
                 function_name=entry["function_name"],
                 model=entry.get("model", "call-site"))
-        second = again.run()
-        assert second.instructions_executed == result.instructions_executed
-        assert len(second.stub_calls) == len(result.stub_calls)
+        result = emulator.run()
+
+        assert result.result != EmulationResult.PASS, (
+            "an unseeded run must not report PASS; that would mean the fault "
+            "was masked rather than reproduced"
+        )
+        assert result.unsupported_instruction_address == 0x20750
+        assert not any(
+            c.function_name == "stopCaptureImageForMessage"
+            for c in result.stub_calls
+        ), "stop lies beyond the unseeded fault"
 
     def test_stage2_sidecar_observed_behaviour_is_current(self):
         """stage2_region's recorded behaviour must match a real run.
@@ -1682,18 +1743,23 @@ class TestLifecycleScenarios:
                 f"region that owns stopCaptureImageForMessage"
             )
 
-    def test_stop_edge_note_distinguishes_unreachable_from_absent(self):
-        """A declared-but-unreached edge must be reported as unreachable.
+    def test_stop_edge_case_reports_observed_stop_after_seeding(self):
+        """Case 4 must observe the stop call once globals are seeded.
 
-        The stop call site sits beyond the run's fault address. Saying "stop was
-        not invoked" without that context implies the behaviour is missing, when
-        it is present in the region and simply not reachable yet.
+        Before seeding, captureBulbImage faulted short of its
+        stopCaptureImageForMessage call site and the case could only report the
+        edge as unreachable. With .got/.data seeded it runs to completion, so
+        this now asserts the edge is actually observed.
         """
         cbi = self.manager.get_fixture("capture_bulb_image_region")
         if cbi is None:
             pytest.skip(
                 "capture_bulb_image_region.bin not supplied locally (private research)"
             )
+        available, reason = self.manager.source_binary_available(
+            "capture_bulb_image_region")
+        if not available:
+            pytest.skip(reason)
 
         from polaris_harness.arm_emulator.lifecycle import (
             Case4StopFailurePreservesPrimaryError,
@@ -1708,12 +1774,70 @@ class TestLifecycleScenarios:
         )
         result = scenario.run()
 
-        notes = " ".join(result.assertion_errors)
-        assert "beyond the run's fault" in notes, (
-            "expected a reachability note naming the call site and fault address; "
-            f"got: {notes!r}"
+        assert result.fixture_name == "capture_bulb_image_region"
+        stop_calls = [
+            c for c in (result.contract.stub_calls if result.contract else [])
+            if c["function_name"] == "stopCaptureImageForMessage"
+        ]
+        assert len(stop_calls) == 1, (
+            f"expected exactly one stop edge call, got {len(stop_calls)}; "
+            f"errors: {result.assertion_errors}"
         )
-        assert "0x207e8" in notes, "note must name the stopCaptureImageForMessage site"
+
+    def test_unreachable_note_distinguishes_unreached_from_absent(self):
+        """A declared boundary short of the fault must be reported as unreachable.
+
+        Exercised directly against a synthetic contract: saying "stop was not
+        invoked" without context implies the behaviour is missing, when it is
+        present in the region and simply not reached. Kept as a unit test
+        because no shipped fixture currently faults short of a declared edge -
+        that is what seeding fixed.
+        """
+        from polaris_harness.arm_emulator.lifecycle import (
+            Case4StopFailurePreservesPrimaryError,
+        )
+
+        cbi = self.manager.get_fixture("capture_bulb_image_region")
+        if cbi is None:
+            pytest.skip(
+                "capture_bulb_image_region.bin not supplied locally (private research)"
+            )
+
+        scenario = Case4StopFailurePreservesPrimaryError(
+            LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR,
+            self.manager,
+            patcher_commit="test",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+        )
+        # Pretend the run faulted before the stop call site at 0x207e8.
+        scenario._active_fixture = cbi
+        scenario._boundary_aliases = dict(cbi.boundary_aliases)
+
+        contract = ArmEmulationContract(
+            binary_sha256="0" * 64,
+            patcher_commit="test",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="lifecycle",
+            command="captureBulbImage",
+            result="unsupported_instruction",
+            exit_code=1,
+            duration_ms=1,
+            instructions_executed=84,
+            mode="arm",
+            unsupported_instruction_address=0x20750,
+        )
+
+        note = scenario._unreachable_note(contract, "stop")
+        assert note is not None, "expected a reachability note"
+        assert "beyond the run's fault" in note
+        assert "0x207e8" in note, "note must name the stopCaptureImageForMessage site"
+        assert "0x20750" in note, "note must name the fault address"
+
+        # A boundary already reached gets no note.
+        scenario._boundary_aliases = {}
+        assert scenario._unreachable_note(contract, "textdomain") is None
 
     def test_case_1_normal_bulb_completion(self):
         """Case 1: Normal held-Bulb completion with exactly one stop/close."""

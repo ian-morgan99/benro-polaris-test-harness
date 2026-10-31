@@ -30,6 +30,7 @@ Design constraints (from issue #15):
 
 import hashlib
 import logging
+import struct
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -37,6 +38,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Unicorn's mem_map requires page alignment.
+PAGE_SIZE = 0x1000
 
 
 class EmulationResult(Enum):
@@ -48,6 +52,89 @@ class EmulationResult(Enum):
     UNSUPPORTED_INSTRUCTION = "unsupported_instruction"
     UNEXPECTED_SYSCALL = "unexpected_syscall"
     MISSING_STUB = "missing_stub"
+
+
+@dataclass
+class DataRegion:
+    """A mapped memory region seeded with real bytes before the run.
+
+    Extracted code regions resolve globals through PC-relative literal pools, so
+    they expect the data those pointers refer to to exist. Leaving such ranges
+    zero-filled makes a `ldr rN,[rA,rB]` + `ldr rN,[rN]` chain dereference 0 and
+    fault immediately, which looks like missing behaviour but is only a missing
+    environment.
+
+    Attributes:
+        address: Page-aligned start address to map
+        size: Page-aligned size to map
+        source_path: File to copy bytes from (e.g. the retained source ELF)
+        source_offset: Offset within that file to start copying
+        dest_offset: Offset within the mapped region to write at
+        fill: Byte used to fill the region before any source bytes are applied
+    """
+
+    address: int
+    size: int
+    source_path: Optional[Path] = None
+    source_offset: int = 0
+    dest_offset: int = 0
+    fill: int = 0
+
+    def validate(self) -> None:
+        """Fail closed on an unusable region description."""
+        if self.address % PAGE_SIZE != 0:
+            raise ValueError(
+                f"DataRegion address {hex(self.address)} is not "
+                f"{PAGE_SIZE}-byte page aligned; Unicorn cannot map it."
+            )
+        if self.size <= 0 or self.size % PAGE_SIZE != 0:
+            raise ValueError(
+                f"DataRegion size {hex(self.size)} must be a positive multiple "
+                f"of {PAGE_SIZE}."
+            )
+        if self.dest_offset < 0 or self.dest_offset >= self.size:
+            raise ValueError(
+                f"DataRegion dest_offset {self.dest_offset} is outside the "
+                f"{self.size}-byte region at {hex(self.address)}."
+            )
+        if self.source_path is not None and self.source_offset < 0:
+            raise ValueError(
+                f"DataRegion source_offset {self.source_offset} must be >= 0."
+            )
+
+
+@dataclass
+class MemoryPatch:
+    """Bytes written into an already-mapped range before the run starts.
+
+    Differs from DataRegion, which maps a new range. A region extracted from an
+    ELF often has its code mapping already cover the globals it dereferences -
+    they are simply zero-filled because they were not part of the extracted
+    window. Patching those words in place reproduces the values the function was
+    linked against without changing the artifact itself.
+
+    Attributes:
+        address: Absolute address to write at
+        source_path: File to read bytes from (the retained source ELF)
+        source_offset: Offset within that file to read from
+        size: Number of bytes to copy
+    """
+
+    address: int
+    source_path: Path
+    source_offset: int
+    size: int
+
+    def validate(self) -> None:
+        """Fail closed on an unusable patch description."""
+        if self.size <= 0:
+            raise ValueError(
+                f"MemoryPatch size {self.size} must be positive."
+            )
+        if self.source_offset < 0:
+            raise ValueError(
+                f"MemoryPatch source_offset {self.source_offset} must be >= 0."
+            )
 
 
 @dataclass
@@ -76,6 +163,22 @@ class EmulationConfig:
     # the run faults on its first data access. Set load_address to the symbol's
     # original vaddr and make code_address/code_size cover it.
     load_address: Optional[int] = None
+    # Extra mapped regions seeded with real bytes before execution. A region
+    # extracted from an ELF dereferences globals that are not part of the
+    # extracted window; without these the run faults on its first pointer chase
+    # and the boundary call sites beyond it can never be observed.
+    data_regions: List[DataRegion] = field(default_factory=list)
+    # Bytes copied from the retained source binary into the existing mapping,
+    # used to give zero-filled globals their real contents.
+    memory_patches: List[MemoryPatch] = field(default_factory=list)
+    # Addresses at which to capture a register snapshot during the run. Used to
+    # diagnose where a run diverges, e.g. which pointer a faulting load derived
+    # its address from.
+    watch_addresses: List[int] = field(default_factory=list)
+    # AAPCS argument values for the entry function, written to R0-R3 then pushed
+    # on the stack in order. A region extracted mid-binary is entered with no
+    # caller frame at all, so anything it reads from its arguments is garbage.
+    entry_arguments: List[int] = field(default_factory=list)
     timeout_ms: int = 5000
     max_instructions: int = 100000
     mode: str = "thumb"
@@ -111,6 +214,8 @@ class EmulationResultRecord:
     error_message: Optional[str] = None
     unsupported_instruction_address: Optional[int] = None
     unexpected_syscall_number: Optional[int] = None
+    # Register snapshots taken at config.watch_addresses, in execution order.
+    watch_captures: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ARMEmulator:
@@ -139,7 +244,7 @@ class ARMEmulator:
         result2 = emu2.run()
     """
 
-    PAGE_SIZE = 0x1000
+    PAGE_SIZE = PAGE_SIZE
 
     def __init__(self, config: EmulationConfig):
         self.config = config
@@ -158,6 +263,8 @@ class ARMEmulator:
         self._start_time_ms: Optional[int] = None
         self._unsupported_instruction_address: Optional[int] = None
         self._unexpected_syscall_number: Optional[int] = None
+        # Register snapshots taken at config.watch_addresses, in execution order.
+        self._watch_captures: List[Dict[str, Any]] = []
         self._logger = logging.getLogger(f"{__name__}.ARMEmulator")
 
         # Validate instruction mode (fail closed on unknown values)
@@ -633,6 +740,25 @@ class ARMEmulator:
         self._logger.error("Unexpected syscall number: %d", syscall_num)
         uc.emu_stop()
 
+    def _hook_watchpoint(self, uc, address: int, size: int,
+                         user_data) -> None:
+        """Capture a register snapshot immediately before a watched instruction.
+
+        Recording state *before* the instruction executes is what makes a
+        faulting load diagnosable: the registers show where the bad pointer was
+        derived from, rather than only that a fault happened.
+
+        Args:
+            uc: Unicorn engine instance
+            address: Watched address
+            size: Instruction size
+            user_data: User data pointer
+        """
+        self._watch_captures.append({
+            "address": address,
+            "registers": self._read_registers(),
+        })
+
     def _hook_intr(self, uc, intno, user_data) -> None:
         """Unicorn interrupt hook - handle ARM SVC instructions.
 
@@ -718,6 +844,198 @@ class ARMEmulator:
         self._uc.reg_write(self._arm_const.UC_ARM_REG_SP,
                            self.config.stack_address + self.config.stack_size)
 
+        # Map and seed any extra data regions the artifact dereferences.
+        self._setup_data_regions()
+
+        # Give zero-filled globals their real contents inside the existing map.
+        self._apply_memory_patches()
+
+    def _mapped_ranges(self) -> List[tuple]:
+        """Ranges this emulator has mapped, for patch bounds checks."""
+        return [
+            (self.config.code_address,
+             self.config.code_address + self.config.code_size),
+            (self.config.stack_address,
+             self.config.stack_address + self.config.stack_size),
+        ] + [
+            (region.address, region.address + region.size)
+            for region in self.config.data_regions
+        ]
+
+    def _apply_memory_patches(self) -> None:
+        """Copy bytes from the retained source binary into mapped memory.
+
+        Used to restore global contents that were outside the extracted window.
+        A patch must land entirely inside a mapping: writing to an unmapped
+        address would fault, and a patch that straddles a boundary would be
+        partially applied and produce a run that looks valid but is not.
+        """
+        ranges = self._mapped_ranges()
+        for index, patch in enumerate(self.config.memory_patches):
+            patch.validate()
+            end = patch.address + patch.size
+            if not any(start <= patch.address and end <= stop
+                       for start, stop in ranges):
+                covered = ", ".join(
+                    f"[{hex(s)}, {hex(e)})" for s, e in ranges)
+                raise ValueError(
+                    f"memory_patches[{index}] [{hex(patch.address)}, "
+                    f"{hex(end)}) is not fully inside a mapped range ({covered})."
+                )
+
+            source = Path(patch.source_path)
+            if not source.exists():
+                raise ValueError(
+                    f"memory_patches[{index}] source {source} does not exist. "
+                    f"Global contents must be copied from the retained source "
+                    f"binary; leaving them zero-filled reproduces the fault this "
+                    f"patch is meant to remove."
+                )
+            with open(source, "rb") as handle:
+                handle.seek(patch.source_offset)
+                payload = handle.read(patch.size)
+            if len(payload) != patch.size:
+                raise ValueError(
+                    f"memory_patches[{index}] read {len(payload)} bytes from "
+                    f"{source} at offset {patch.source_offset}, expected "
+                    f"{patch.size}."
+                )
+            self._uc.mem_write(patch.address, payload)
+
+    def _setup_data_regions(self) -> None:
+        """Map configured data regions and seed them with real bytes.
+
+        Overlaps are rejected rather than silently resolved: a data region that
+        covers the code mapping would overwrite the artifact, and one covering
+        the stack would corrupt the frame. Both produce runs whose results look
+        plausible but describe an environment that never existed.
+        """
+        load_address = (
+            self.config.load_address
+            if self.config.load_address is not None
+            else self.config.code_address
+        )
+        code_end = self.config.code_address + self.config.code_size
+        stack_end = self.config.stack_address + self.config.stack_size
+        # The code mapping is deliberately wider than the artifact: it spans the
+        # globals a region dereferences. So the thing that must not be clobbered
+        # is the artifact's own bytes, not every address inside the mapping.
+        artifact_start = load_address
+        artifact_end = load_address + self._binary_length(self.config.binary_path)
+
+        # Ranges mapped so far, extended as data regions are added so a later
+        # region can be checked against an earlier one.
+        mapped: List[tuple] = [
+            (self.config.code_address, code_end),
+            (self.config.stack_address, stack_end),
+        ]
+
+        for index, region in enumerate(self.config.data_regions):
+            region.validate()
+            end = region.address + region.size
+            if region.address < artifact_end and end > artifact_start:
+                raise ValueError(
+                    f"data_regions[{index}] [{hex(region.address)}, {hex(end)}) "
+                    f"overlaps the artifact "
+                    f"[{hex(artifact_start)}, {hex(artifact_end)}); it would "
+                    f"overwrite the code under test."
+                )
+            if region.address < stack_end and end > self.config.stack_address:
+                raise ValueError(
+                    f"data_regions[{index}] [{hex(region.address)}, {hex(end)}) "
+                    f"overlaps the stack mapping "
+                    f"[{hex(self.config.stack_address)}, {hex(stack_end)})."
+                )
+
+            # The code mapping usually already spans these addresses, so only
+            # map when the range is genuinely new. Re-mapping an existing page
+            # makes Unicorn fail with an out-of-memory error that says nothing
+            # about the real cause.
+            already_mapped = any(
+                start <= region.address and end <= stop
+                for start, stop in mapped
+            )
+            if not already_mapped:
+                straddling = [
+                    (start, stop) for start, stop in mapped
+                    if start < end and stop > region.address
+                ]
+                if straddling:
+                    spans = ", ".join(
+                        f"[{hex(s)}, {hex(e)})" for s, e in straddling)
+                    raise ValueError(
+                        f"data_regions[{index}] [{hex(region.address)}, "
+                        f"{hex(end)}) partially overlaps an existing mapping "
+                        f"({spans}). Unicorn cannot map a range that straddles "
+                        f"a mapped page. Widen code_address/code_size to cover "
+                        f"[{hex(min(region.address, straddling[0][0]))}, "
+                        f"{hex(max(end, straddling[0][1]))}) so the whole range "
+                        f"is one mapping."
+                    )
+                self._uc.mem_map(region.address, region.size)
+                mapped.append((region.address, end))
+            if region.fill:
+                self._uc.mem_write(region.address, bytes([region.fill]) * region.size)
+            if region.source_path is None:
+                continue
+
+            source = Path(region.source_path)
+            if not source.exists():
+                raise ValueError(
+                    f"data_regions[{index}] source {source} does not exist. "
+                    f"Seed bytes must come from the retained source binary; do "
+                    f"not substitute zeros, that reproduces the fault this "
+                    f"region is meant to remove."
+                )
+            with open(source, "rb") as handle:
+                handle.seek(region.source_offset)
+                available = region.size - region.dest_offset
+                payload = handle.read(available)
+            if not payload:
+                raise ValueError(
+                    f"data_regions[{index}] read 0 bytes from {source} at offset "
+                    f"{region.source_offset}."
+                )
+            self._uc.mem_write(region.address + region.dest_offset, payload)
+
+    def _setup_entry_arguments(self) -> None:
+        """Write AAPCS arguments for the entry function.
+
+        A region extracted from the middle of a binary is entered with no caller
+        frame: R0-R3 hold whatever the previous run left and the stack holds
+        zeros. Anything the function reads from its parameters is therefore
+        garbage, and control flow that branches on them is meaningless.
+
+        Arguments beyond R0-R3 are pushed in order so SP-4 holds the fifth
+        argument, matching AAPCS.
+        """
+        values = list(self.config.entry_arguments)
+        if not values:
+            return
+
+        arg_regs = ["UC_ARM_REG_R0", "UC_ARM_REG_R1", "UC_ARM_REG_R2",
+                    "UC_ARM_REG_R3"]
+        for reg_name, value in zip(arg_regs, values):
+            const = getattr(self._arm_const, reg_name, None)
+            if const is not None:
+                self._uc.reg_write(const, value & 0xFFFFFFFF)
+
+        extra = values[len(arg_regs):]
+        if not extra:
+            return
+        sp = self._uc.reg_read(self._arm_const.UC_ARM_REG_SP)
+        needed = 4 * len(extra)
+        if sp - needed < self.config.stack_address:
+            raise ValueError(
+                f"stack cannot hold {len(extra)} spilled argument(s): SP "
+                f"{hex(sp)} would fall below the stack base "
+                f"{hex(self.config.stack_address)}. Increase stack_size."
+            )
+        for offset, value in enumerate(extra):
+            self._uc.mem_write(sp - (offset + 1) * 4,
+                               struct.pack("<I", value & 0xFFFFFFFF))
+        self._uc.reg_write(self._arm_const.UC_ARM_REG_SP, sp - needed)
+
     def _setup_hooks(self) -> None:
         """Install Unicorn hooks for tracing and fail-closed behavior."""
         from unicorn import UC_HOOK_CODE, UC_HOOK_INSN_INVALID, UC_HOOK_INTR
@@ -725,6 +1043,15 @@ class ARMEmulator:
         self._uc.hook_add(UC_HOOK_CODE, self._hook_code)
         self._uc.hook_add(UC_HOOK_INSN_INVALID, self._hook_invalid_instruction)
         self._uc.hook_add(UC_HOOK_INTR, self._hook_intr)
+
+        # Per-address register captures, installed only when requested.
+        if self.config.watch_addresses:
+            watched = set(self.config.watch_addresses)
+            for address in sorted(watched):
+                self._uc.hook_add(
+                    UC_HOOK_CODE, self._hook_watchpoint,
+                    begin=address, end=address + 1,
+                )
 
     def _initialize_unicorn(self) -> None:
         """Initialize the Unicorn engine in ARM or Thumb mode."""
@@ -779,6 +1106,10 @@ class ARMEmulator:
             # so that BX LR returns to mapped memory instead of address 0
             lr = entry + len(binary_data)
             self._uc.reg_write(self._arm_const.UC_ARM_REG_LR, lr)
+
+            # Supply AAPCS arguments so the function sees a caller frame rather
+            # than whatever the previous run left in R0-R3.
+            self._setup_entry_arguments()
 
             # Start emulation
             self._uc.emu_start(entry, self.config.entry_address + len(binary_data),
@@ -848,6 +1179,11 @@ class ARMEmulator:
             result.instructions_executed = self._instruction_count
             if not result.stub_calls:
                 result.stub_calls = list(self._stub_call_records)
+            # Captures are recorded even when the run faults: the point of a
+            # watchpoint is to explain a failure, so dropping them on the
+            # failure path would defeat it.
+            if not result.watch_captures:
+                result.watch_captures = list(self._watch_captures)
             if not result.final_registers and self._uc is not None:
                 # Best effort: registers may be unreadable if the engine died
                 # before any instruction ran.
