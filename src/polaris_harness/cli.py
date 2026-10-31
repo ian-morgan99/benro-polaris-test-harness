@@ -355,11 +355,18 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
         )
 
         all_passed = True
+        all_skipped = True
+        any_real_failure = False
         for case, result in results.items():
+            if result.skipped:
+                print(f"  {case.value}: SKIP - {result.skip_reason}")
+                continue
+            all_skipped = False
             status = "PASS" if result.passed else "FAIL"
             print(f"  {case.value}: {status}")
             if not result.passed:
                 all_passed = False
+                any_real_failure = True
                 for err in result.assertion_errors:
                     print(f"    - {err}")
                 if result.contract and not result.contract.is_pass():
@@ -367,6 +374,9 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
                     print(f"    exit_code: {result.contract.exit_code}")
                     print(f"    error: {result.contract.error_message}")
 
+        if all_skipped:
+            print("⚠ All ARM lifecycle cases skipped (no real Stage-2 fixture available)")
+            return 0
         if all_passed:
             print("✓ All ARM lifecycle cases passed")
             return 0

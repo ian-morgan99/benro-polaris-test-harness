@@ -78,6 +78,8 @@ class LifecycleTestResult:
 
     case: LifecycleCase
     passed: bool
+    skipped: bool = False
+    skip_reason: Optional[str] = None
     contract: Optional[ArmEmulationContract] = None
     assertion_errors: List[str] = field(default_factory=list)
 
@@ -172,6 +174,20 @@ class LifecycleScenario:
         Returns:
             LifecycleTestResult
         """
+        # SKIP if using the tiny synthetic fixture — it cannot produce
+        # camera/libgphoto/timer/callback events. Only real Stage-2 fixtures
+        # can exercise the lifecycle paths.
+        if self.fixture_name == "tiny_fixture":
+            return LifecycleTestResult(
+                case=self.case,
+                passed=False,
+                skipped=True,
+                skip_reason=(
+                    "no ARM-mode Stage-2 fixture available; "
+                    "tiny_fixture is a 2-instruction engine smoke test only"
+                ),
+            )
+
         emulator = self._create_emulator(command)
         result_record = emulator.run()
         contract = ArmEmulationContract.from_emulation_result(result_record)

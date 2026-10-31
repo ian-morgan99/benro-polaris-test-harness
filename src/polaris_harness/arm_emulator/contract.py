@@ -58,6 +58,7 @@ class ArmEmulationContract:
     exit_code: int
     duration_ms: int
     instructions_executed: int
+    mode: str = "thumb"
 
     # Observed side effects
     stub_calls: List[Dict[str, Any]] = field(default_factory=list)
@@ -118,6 +119,7 @@ class ArmEmulationContract:
             exit_code=result.exit_code,
             duration_ms=result.duration_ms,
             instructions_executed=result.instructions_executed,
+            mode=result.mode,
             stub_calls=[
                 {
                     "stub_name": call.stub_name,

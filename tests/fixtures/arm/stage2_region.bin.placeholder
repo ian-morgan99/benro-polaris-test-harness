@@ -6,32 +6,41 @@ and consumed by patcher issue #251.
 
 ## Status
 
-**PLACEHOLDER** — The actual binary region from the v90-era `capture_image_with_Bulb`
-capture lifecycle has not yet been checked in. This file documents the expected
-provenance fields that must accompany it when available.
+**NOT CHECKED IN** — The actual binary region from the v90-era
+`capture_image_with_Bulb` capture lifecycle was extracted read-only during
+review but deliberately not checked in to this repository. Redistribution of
+the blob is a decision for this repo, not an assumption to inherit.
 
-## Expected provenance
-
-When the real binary region is available, it must include:
+## Provenance (recorded from extraction)
 
 | Field | Value |
 |-------|-------|
 | Source issue | ian-morgan99/benro-polaris-firmware-patcher#251 |
-| Binary SHA-256 | TBD — compute with `sha256sum stage2_region.bin` |
+| Source binary | pgphoto.stage2ondisk (v90-era) |
+| Symbol | capture_image_with_Bulb |
+| Entry address | 0x101aac |
+| Size | 2176 bytes |
+| Mode | arm (ELF flags 0x5000200, Version5 EABI, soft-float ABI) |
+| Binary SHA-256 | 23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3 |
 | Patcher commit | TBD |
 | Harness revision | TBD |
 | Emulator version | TBD (Unicorn version) |
 | Fixture/stub profile | TBD |
 | Command | TBD |
 
-## How to add the real binary
+## Retrieval procedure
 
-1. Obtain the exact ARM binary or extracted code region from the v90-era
-   `capture_image_with_Bulb` capture lifecycle (owned by patcher issue #251).
-2. Place it as `stage2_region.bin` in this directory.
-3. Record its SHA-256: `sha256sum stage2_region.bin`
-4. Update this README with the provenance fields above.
-5. Add a test in `tests/test_arm_emulator.py` that loads and replays this
+The region was extracted read-only from `pgphoto.stage2ondisk` at symbol
+`capture_image_with_Bulb` (address 0x101aac, size 2176 bytes). The source
+binary was not modified. To re-obtain:
+
+1. Locate the pgphoto.stage2ondisk binary from the v90-era firmware build.
+2. Extract the region at address 0x101aac, length 2176 bytes.
+3. Verify SHA-256: `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3`
+4. Place as `stage2_region.bin` in this directory.
+5. Update this file with patcher commit, harness revision, emulator version,
+   fixture/stub profile, and command.
+6. Add a test in `tests/test_arm_emulator.py` that loads and replays this
    region with explicit ABI stubs.
 
 ## Constraints (from issue #15)

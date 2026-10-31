@@ -42,6 +42,11 @@ class StubProfile:
     timer_stub: Optional[Callable] = None
     callback_stub: Optional[Callable] = None
 
+    # ABI shape per stub boundary: argument count and pointer dereference spec.
+    # Each entry maps stub name -> {"arg_count": N, "pointer_args": [indices],
+    # "deref_bytes": {index: byte_count}}
+    abi_shape: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
     def register_all(self, registry: "StubRegistry") -> None:
         """Register all stubs in this profile with the registry.
 

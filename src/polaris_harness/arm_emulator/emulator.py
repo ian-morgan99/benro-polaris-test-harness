@@ -30,6 +30,7 @@ Design constraints (from issue #15):
 
 import hashlib
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -66,6 +67,7 @@ class EmulationConfig:
     code_size: int = 0x10000
     timeout_ms: int = 5000
     max_instructions: int = 100000
+    mode: str = "thumb"
 
 
 @dataclass
@@ -92,6 +94,7 @@ class EmulationResultRecord:
     exit_code: int
     duration_ms: int
     instructions_executed: int
+    mode: str = "thumb"
     stub_calls: List[StubCallRecord] = field(default_factory=list)
     final_registers: Dict[str, int] = field(default_factory=dict)
     error_message: Optional[str] = None
@@ -113,6 +116,7 @@ class ARMEmulator:
         self._arm_const: Any = None
         self._stub_registry: Dict[str, Callable] = {}
         self._stub_call_records: List[StubCallRecord] = []
+        self._stub_entry_addresses: Dict[str, int] = {}
         self._instruction_count = 0
         self._max_instructions = config.max_instructions
         self._instruction_limit_exceeded = False
@@ -120,6 +124,14 @@ class ARMEmulator:
         self._unsupported_instruction_address: Optional[int] = None
         self._unexpected_syscall_number: Optional[int] = None
         self._logger = logging.getLogger(f"{__name__}.ARMEmulator")
+
+        # Validate instruction mode (fail closed on unknown values)
+        if config.mode not in ("arm", "thumb"):
+            raise ValueError(
+                f"Invalid instruction mode: {config.mode!r}. "
+                f"Expected 'arm' or 'thumb'."
+            )
+        self._mode = config.mode
 
     def register_stub(self, name: str, handler: Callable) -> None:
         """Register an ABI stub handler.
@@ -130,6 +142,22 @@ class ARMEmulator:
         """
         self._stub_registry[name] = handler
         self._logger.debug("Registered stub: %s", name)
+
+    def register_stub_entry(self, stub_name: str, address: int) -> None:
+        """Register a stub entry address for AAPCS marshaling.
+
+        When execution reaches this address, the emulator reads R0-R3 (plus
+        stack words past R3 per the profile's ABI shape) and passes them as
+        arguments to the stub. The stub's return value is written back to R0.
+
+        Args:
+            stub_name: Stub identifier (must match a registered stub)
+            address: Entry address where the stub is invoked
+        """
+        if stub_name not in self._stub_registry:
+            raise KeyError(f"Cannot register entry for unregistered stub: {stub_name}")
+        self._stub_entry_addresses[stub_name] = address
+        self._logger.debug("Registered stub entry: %s @ 0x%08x", stub_name, address)
 
     def _call_stub(self, stub_name: str, function_name: str, arguments: List[Any],
                    register_snapshot: Dict[str, int]) -> Any:
@@ -212,6 +240,106 @@ class ARMEmulator:
             self._instruction_limit_exceeded = True
             self._logger.error("Instruction limit exceeded: %d", self._instruction_count)
             uc.emu_stop()
+
+        # AAPCS stub marshaling: if we've reached a stub entry address,
+        # read R0-R3 (+ stack per ABI shape), call the stub, write return
+        # value to R0, and skip past the call instruction.
+        for stub_name, entry_addr in self._stub_entry_addresses.items():
+            if address == entry_addr:
+                self._marshal_stub_call(uc, stub_name)
+                # Skip past the call instruction (BL/BLX is 4 bytes in ARM, 2 in Thumb)
+                instr_size = 2 if self._mode == "thumb" else 4
+                pc = uc.reg_read(self._arm_const.UC_ARM_REG_PC)
+                uc.reg_write(self._arm_const.UC_ARM_REG_PC, pc + instr_size)
+                return
+
+    def _marshal_stub_call(self, uc, stub_name: str) -> None:
+        """Marshal AAPCS arguments and call a stub.
+
+        Reads R0-R3 (plus stack words past R3 per ABI shape), calls the stub,
+        writes the return value back to R0.
+
+        Args:
+            uc: Unicorn engine instance
+            stub_name: Stub identifier
+
+        Raises:
+            KeyError: If stub is not registered (fail closed)
+            ValueError: If required arguments cannot be read (fail closed)
+        """
+        if stub_name not in self._stub_registry:
+            raise KeyError(f"Missing stub: {stub_name}")
+
+        # Read caller-saved argument registers R0-R3
+        arg_regs = ["R0", "R1", "R2", "R3"]
+        arguments = []
+        for reg in arg_regs:
+            const = getattr(self._arm_const, f"UC_ARM_REG_{reg}", None)
+            if const is not None:
+                arguments.append(uc.reg_read(const))
+
+        # Apply ABI shape from stub profile if available
+        abi_shape: Dict[str, Any] = {}
+        try:
+            from .stubs import StubProfile
+            # We need access to the profile; for now use default arg_count=4
+            abi_shape = {"arg_count": 4, "pointer_args": [], "deref_bytes": {}}
+        except ImportError:
+            abi_shape = {"arg_count": 4, "pointer_args": [], "deref_bytes": {}}
+
+        arg_count: int = abi_shape.get("arg_count", 4)
+        pointer_args: List[int] = abi_shape.get("pointer_args", [])
+        deref_bytes: Dict[int, int] = abi_shape.get("deref_bytes", {})
+
+        # Read stack words past R3 if needed
+        sp = uc.reg_read(self._arm_const.UC_ARM_REG_SP)
+        for i in range(4, arg_count):
+            stack_offset = (i - 4) * 4
+            try:
+                stack_val = uc.mem_read(sp + stack_offset, 4)
+                arguments.append(int.from_bytes(stack_val, "little"))
+            except Exception:
+                raise ValueError(
+                    f"Cannot read stack argument {i} at SP+{stack_offset}: "
+                    f"unmapped memory"
+                )
+
+        # Dereference pointer arguments if declared
+        for idx in pointer_args:
+            if idx < len(arguments):
+                ptr_val = arguments[idx]
+                byte_count = deref_bytes.get(idx, 4)
+                try:
+                    mem_data = uc.mem_read(ptr_val, byte_count)
+                    arguments[idx] = int.from_bytes(mem_data, "little")
+                except Exception:
+                    raise ValueError(
+                        f"Cannot dereference pointer argument {idx} at 0x{ptr_val:08x}: "
+                        f"unmapped memory"
+                    )
+
+        # Read register snapshot before the call
+        register_snapshot = self._read_registers()
+
+        # Call the stub
+        handler = self._stub_registry[stub_name]
+        return_value = handler("aapcs_call", arguments, register_snapshot)
+
+        # Write return value back to R0
+        uc.reg_write(self._arm_const.UC_ARM_REG_R0, return_value)
+
+        # Record the stub call
+        record = StubCallRecord(
+            stub_name=stub_name,
+            function_name="aapcs_call",
+            arguments=list(arguments),
+            return_value=return_value,
+            timestamp_ms=int(time.time() * 1000) - (self._start_time_ms or 0),
+            register_snapshot=register_snapshot,
+        )
+        self._stub_call_records.append(record)
+        self._logger.debug("AAPCS stub call: %s(%s) -> %s",
+                           stub_name, arguments, return_value)
 
     def _hook_invalid_instruction(self, uc, address: int, size: int, user_data) -> None:
         """Unicorn invalid instruction hook - fail closed on unsupported instructions.
@@ -334,11 +462,13 @@ class ARMEmulator:
         self._uc.hook_add(UC_HOOK_INTR, self._hook_intr)
 
     def _initialize_unicorn(self) -> None:
-        """Initialize the Unicorn engine in ARM Thumb mode."""
-        from unicorn import Uc, UC_ARCH_ARM, UC_MODE_THUMB, arm_const
+        """Initialize the Unicorn engine in ARM or Thumb mode."""
+        from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_MODE_THUMB, arm_const
+
+        mode_const = UC_MODE_ARM if self._mode == "arm" else UC_MODE_THUMB
 
         self._arm_const = arm_const
-        self._uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
+        self._uc = Uc(UC_ARCH_ARM, mode_const)
         self._setup_memory(self._load_binary(self.config.binary_path))
         self._setup_hooks()
 
@@ -370,24 +500,25 @@ class ARMEmulator:
             # Load binary to determine its length
             binary_data = self._load_binary(self.config.binary_path)
 
-            # Set entry point
-            self._uc.reg_write(self._arm_const.UC_ARM_REG_PC,
-                               self.config.entry_address | 1)  # Thumb bit
+            # Set entry point. In Thumb mode set the Thumb bit (bit 0) on PC/LR;
+            # in ARM mode write the address unmodified.
+            entry = self.config.entry_address | 1 if self._mode == "thumb" else self.config.entry_address
+            self._uc.reg_write(self._arm_const.UC_ARM_REG_PC, entry)
 
             # Set LR to a valid return address within mapped code region
             # so that BX LR returns to mapped memory instead of address 0
-            self._uc.reg_write(self._arm_const.UC_ARM_REG_LR,
-                               self.config.entry_address + len(binary_data) | 1)
+            lr = entry + len(binary_data)
+            self._uc.reg_write(self._arm_const.UC_ARM_REG_LR, lr)
 
             # Start emulation
-            self._uc.emu_start(self.config.entry_address | 1,
-                               self.config.entry_address + len(binary_data),
+            self._uc.emu_start(entry, self.config.entry_address + len(binary_data),
                                timeout=self.config.timeout_ms)
 
             # Read final register state
             result.final_registers = self._read_registers()
             result.instructions_executed = self._instruction_count
             result.stub_calls = self._stub_call_records
+            result.mode = self._mode
 
             # Determine result
             if self._instruction_limit_exceeded:
