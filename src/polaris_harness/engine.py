@@ -5,14 +5,13 @@ Implements deterministic state machine for scenario execution.
 """
 
 import uuid
-import re
-from typing import Dict, List, Optional, Any, Callable
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
-from .clock import ClockManager, ClockMode, ClockEvent
+from .clock import ClockManager, ClockMode
 from .framing import Frame
-from .matcher import MatchRule, MatchResult, MatchType, Matcher
+from .matcher import MatchType, Matcher, MatchRule
 
 
 class EngineEventType(Enum):
@@ -139,6 +138,7 @@ class ScenarioEngine:
         self.assertions: List[str] = scenario_data.get("assertions", [])
         self.endpoint_available = {"command": True, "preview": True}
         self.connection_id = str(uuid.uuid4())
+        self.markers: set[str] = set()
 
         # Initialize state machine
         self._initialize_state_machine()
@@ -219,7 +219,6 @@ class ScenarioEngine:
         Returns:
             List of actions to execute
         """
-        current_state = self.state_machine.get_current_state()
         state_data = self.state_machine.get_state_data()
 
         # Get on_request rules for current state
@@ -363,13 +362,14 @@ class ScenarioEngine:
 
             elif action.action_type == "transition":
                 next_state = action.parameters.get("next_state", "")
+                from_state = self.state_machine.get_current_state()
                 if self.state_machine.transition_to(next_state):
                     event = EngineEvent(
                         event_type=EngineEventType.ACTION_EXECUTED,
                         timestamp_ms=self.clock.now_ms() + action.after_ms,
                         data={
                             "action": "transition",
-                            "from_state": self.state_machine.get_current_state(),
+                            "from_state": from_state,
                             "to_state": next_state
                         },
                         source="engine"
@@ -394,6 +394,7 @@ class ScenarioEngine:
 
             elif action.action_type == "emit_marker":
                 marker = action.parameters.get("marker", "")
+                self.markers.add(marker)
                 event = EngineEvent(
                     event_type=EngineEventType.ACTION_EXECUTED,
                     timestamp_ms=self.clock.now_ms() + action.after_ms,
@@ -406,6 +407,7 @@ class ScenarioEngine:
                 events.append(event)
 
         self.events.extend(events)
+        self.actions.extend(actions)
         return events
 
     def check_assertions(self) -> List[str]:
@@ -415,9 +417,59 @@ class ScenarioEngine:
             List of failed assertions
         """
         failed_assertions = []
+        action_events = [
+            event
+            for event in self.events
+            if event.event_type == EngineEventType.ACTION_EXECUTED
+        ]
+        response_text = [
+            event.data.get("text", "")
+            for event in action_events
+            if event.data.get("action") == "send"
+        ]
 
-        # TODO: Implement assertion checking
-        # For now, just return empty list
+        for assertion in self.assertions:
+            if assertion.startswith("state_is:"):
+                expected = assertion.split(":", 1)[1]
+                if self.state_machine.get_current_state() != expected:
+                    failed_assertions.append(
+                        f"{assertion}: current state is "
+                        f"{self.state_machine.get_current_state()}"
+                    )
+            elif assertion.startswith("marker:"):
+                expected = assertion.split(":", 1)[1]
+                if expected not in self.markers:
+                    failed_assertions.append(f"{assertion}: marker was not emitted")
+            elif assertion.startswith("response_contains:"):
+                expected = assertion.split(":", 1)[1]
+                if not any(expected in text for text in response_text):
+                    failed_assertions.append(
+                        f"{assertion}: no response contained the expected text"
+                    )
+            elif assertion.startswith("no_response_contains:"):
+                forbidden = assertion.split(":", 1)[1]
+                if any(forbidden in text for text in response_text):
+                    failed_assertions.append(
+                        f"{assertion}: forbidden response text was emitted"
+                    )
+            elif assertion == "no_motion_action":
+                if any("motion" in text.lower() for text in response_text):
+                    failed_assertions.append(
+                        "no_motion_action: motion response was emitted"
+                    )
+            elif assertion == "usb_uart_gate_failure_is_detected":
+                if not any("USB-UART" in text for text in response_text):
+                    failed_assertions.append(assertion)
+            elif assertion == "upgrade_aborts_when_usb_uart_missing":
+                if not any("aborting upgrade" in text for text in response_text):
+                    failed_assertions.append(assertion)
+            elif assertion == "error_message_contains_usb_uart_reference":
+                if not any("USB-UART" in text for text in response_text):
+                    failed_assertions.append(assertion)
+            else:
+                failed_assertions.append(
+                    f"{assertion}: unsupported assertion language"
+                )
         return failed_assertions
 
     def get_scenario_state(self) -> Dict[str, Any]:
@@ -460,3 +512,4 @@ class ScenarioEngine:
         self.clock.reset()
         self.endpoint_available = {"command": True, "preview": True}
         self.connection_id = str(uuid.uuid4())
+        self.markers.clear()

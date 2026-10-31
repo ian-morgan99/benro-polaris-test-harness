@@ -293,20 +293,20 @@ The following remain outside harness acceptance and require physical evidence:
 
 ## Current baseline
 
-The plan is an additional safety layer, not a completed release test. On
-2026-10-31 the existing harness baseline was:
+The plan is an additional safety layer, not a completed release test. The
+initial baseline exposed a missing declared Unicorn dependency and placeholder
+schema validation. Those blockers have now been addressed locally:
 
-- non-ARM suite: 62 passed;
-- full suite: 110 passed, 3 failed;
-- the three failures were ARM-emulator tests because the current virtual
-  environment does not contain the declared Unicorn dependency;
-- the existing scenario validation command exited successfully but reported
-  that schema validation is not yet implemented;
-- no Astro-specific scenario package has been promoted to this repository yet.
+- full harness suite: 142 passed;
+- ARM emulation runs with the declared Unicorn 2.1.4 dependency;
+- CLI schema validation passes all 12 current scenario/evidence manifests;
+- seven Astro scenario packages and executable contract tests are present;
+- the real loopback TCP scenario smoke test passes.
 
-Therefore the harness is not currently a release gate. The missing dependency,
-schema implementation, and Astro scenario families are explicit prerequisites
-before relying on a green harness result.
+Therefore the harness is still not a release gate. All Astro scenarios are
+synthetic contracts, and no harness result proves a physical camera, Polaris
+runtime, motor, or final photograph. Physical promotion and the patcher/device
+gates remain explicit prerequisites.
 
 ## Suggested implementation order
 

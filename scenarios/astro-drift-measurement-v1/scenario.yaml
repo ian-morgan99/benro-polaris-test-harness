@@ -1,0 +1,73 @@
+schema_version: "1"
+id: astro-drift-measurement-v1
+version: 1
+title: Timed solves measure drift without authorising speed control
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: collecting
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  collecting:
+    on_request:
+      - id: solve-zero
+        match:
+          type: exact_text
+          value: "SOLVE t=0 ra_error=0.10 dec_error=-0.20 roll_error=0.01#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "DRIFT_SAMPLE_ACCEPTED t=0#"
+      - id: solve-one
+        match:
+          type: exact_text
+          value: "SOLVE t=10000 ra_error=0.20 dec_error=-0.20 roll_error=0.02#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "DRIFT_SAMPLE_ACCEPTED t=10000#"
+      - id: solve-two
+        match:
+          type: exact_text
+          value: "SOLVE t=20000 ra_error=0.30 dec_error=-0.20 roll_error=0.03#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "DRIFT_ESTIMATE ra_rate=0.01 dec_rate=0 roll_rate=0.001 rate_control=unavailable#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: measured
+  measured:
+    on_request:
+      - id: speed-command
+        match:
+          type: exact_text
+          value: "SET_RATE axis=ra value=0.01#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "RATE_REJECTED reason=unqualified_api#"
+assertions:
+  - timed_samples_are_required
+  - static_offset_is_not_rate_proof
+  - unqualified_rate_api_is_unavailable

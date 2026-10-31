@@ -1,0 +1,90 @@
+schema_version: "1"
+id: astro-capture-publication-v1
+version: 1
+title: Astro capture completion requires a stable matching local JPEG
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: waiting
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  waiting:
+    on_request:
+      - id: event-before-file
+        match:
+          type: exact_text
+          value: "CAPTURE_COMPLETE id=1 path=/app/sd/IMG_0001.JPG#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "WAITING_FOR_FILE id=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: file_pending
+      - id: wrong-file
+        match:
+          type: exact_text
+          value: "FILE_STABLE id=9 path=/app/sd/IMG_0009.JPG sha=wrong#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "REJECT file_identity_mismatch#"
+  file_pending:
+    on_request:
+      - id: partial-file
+        match:
+          type: exact_text
+          value: "FILE_PARTIAL id=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "WAITING_FOR_STABLE_FILE id=1#"
+      - id: stable-file
+        match:
+          type: exact_text
+          value: "FILE_STABLE id=1 path=/app/sd/IMG_0001.JPG sha=good#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "FILE_ADMITTED id=1 immutable_snapshot=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: admitted
+  admitted:
+    on_request:
+      - id: duplicate-event
+        match:
+          type: exact_text
+          value: "CAPTURE_COMPLETE id=1 path=/app/sd/IMG_0001.JPG#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "DUPLICATE_IGNORED id=1#"
+assertions:
+  - completion_before_file_is_pending
+  - partial_jpeg_is_not_admitted
+  - source_file_identity_is_required
+  - duplicate_completion_is_idempotent

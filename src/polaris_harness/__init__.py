@@ -91,6 +91,7 @@ from .runtime import (
     remove_verifier,
     stop_all as stop_all_runtime_verifiers,
 )
+from .install_simulation import InstallObservation, InstallSimulator, InstallState
 from .ledger import (
     ExecutionLedger,
     LedgerEntry,
@@ -209,6 +210,9 @@ __all__ = [
     "get_verifier",
     "remove_verifier",
     "stop_all_runtime_verifiers",
+    "InstallObservation",
+    "InstallSimulator",
+    "InstallState",
     "__version__",
     "SCENARIO_SCHEMA_VERSION",
     "EVIDENCE_SCHEMA_VERSION",

@@ -1,0 +1,90 @@
+schema_version: "1"
+id: astro-firmware-install-v1
+version: 1
+title: Firmware installation requires staged identity and verified reboot
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: not_staged
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  not_staged:
+    on_request:
+      - id: zip-only
+        match:
+          type: exact_text
+          value: "STAGE artifact=FwPkt.zip tree=0#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "INSTALL_REJECTED reason=extracted_tree_required#"
+      - id: stage-valid
+        match:
+          type: exact_text
+          value: "STAGE artifact=FwPkt.zip tree=1 hash=match manifest=match#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "STAGED_VERIFIED reboot_pending=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: staged
+  staged:
+    on_request:
+      - id: ap-flap
+        match:
+          type: exact_text
+          value: "REBOOT_RESULT ap_flap=1 uptime_reset=0#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "INSTALL_UNCERTAIN reason=no_uptime_reset#"
+      - id: reboot-verified
+        match:
+          type: exact_text
+          value: "REBOOT_RESULT ap_flap=1 uptime_reset=1 build_id=match hashes=match#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "INSTALLED_VERIFIED rollback=available#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: installed
+  installed:
+    on_request:
+      - id: rollback-missing
+        match:
+          type: exact_text
+          value: "ROLLBACK package=missing#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "RELEASE_BLOCKED reason=rollback_missing#"
+assertions:
+  - zip_only_staging_is_rejected
+  - ap_flap_is_not_reboot_proof
+  - post_boot_identity_is_required
+  - rollback_artifact_is_required

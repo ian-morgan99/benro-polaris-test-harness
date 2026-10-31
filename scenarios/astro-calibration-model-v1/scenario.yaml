@@ -1,0 +1,99 @@
+schema_version: "1"
+id: astro-calibration-model-v1
+version: 1
+title: Three-point calibration requires good geometry and fourth-point validation
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: collecting
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  collecting:
+    on_request:
+      - id: point-one
+        match:
+          type: exact_text
+          value: "POINT index=1 az=10 alt=30 solved=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "POINT_ACCEPTED index=1#"
+      - id: point-two
+        match:
+          type: exact_text
+          value: "POINT index=2 az=130 alt=45 solved=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "POINT_ACCEPTED index=2#"
+      - id: point-three
+        match:
+          type: exact_text
+          value: "POINT index=3 az=250 alt=55 solved=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "MODEL_READY points=3 holdout_required=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: holdout
+      - id: bad-geometry
+        match:
+          type: exact_text
+          value: "POINT index=bad geometry=ill_conditioned#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "MODEL_REJECTED reason=ill_conditioned_geometry#"
+  holdout:
+    on_request:
+      - id: fourth-point
+        match:
+          type: exact_text
+          value: "POINT index=4 holdout=1 solved=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "HOLDOUT_RECORDED rate_control=unavailable#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: validated
+  validated:
+    on_request:
+      - id: rate-proof-not-implied
+        match:
+          type: exact_text
+          value: "RATE_PROOF_REQUESTED from=holdout#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "RATE_PROOF_REJECTED reason=timed_series_required#"
+assertions:
+  - three_points_require_spatial_separation
+  - fourth_point_is_holdout
+  - holdout_does_not_authorize_rate_control

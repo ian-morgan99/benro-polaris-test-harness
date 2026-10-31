@@ -54,6 +54,7 @@ class TCPServer:
         self.listener_thread = None
         self.connection_threads = {}
         self.event_handlers: Dict[str, List[Callable]] = {}
+        self.framing_engine_factory: Optional[Callable[[], FramingEngine]] = None
 
     def start(self) -> bool:
         """Start the TCP server.
@@ -81,7 +82,7 @@ class TCPServer:
         self.running = False
 
         # Close all connections
-        for connection_id, connection in self.connections.items():
+        for connection_id, connection in list(self.connections.items()):
             connection.state = ConnectionState.CLOSED
             try:
                 connection.socket.close()
@@ -116,7 +117,12 @@ class TCPServer:
                     connection_id=connection_id,
                     socket=client_socket,
                     address=address,
-                    metadata={"host": self.host, "port": self.port}
+                    metadata={"host": self.host, "port": self.port},
+                    framing_engine=(
+                        self.framing_engine_factory()
+                        if self.framing_engine_factory
+                        else FramingEngine()
+                    ),
                 )
 
                 self.connections[connection_id] = connection
@@ -149,7 +155,7 @@ class TCPServer:
         try:
             while self.running and connection.state == ConnectionState.OPEN:
                 # Receive data
-                self.server_socket.settimeout(1.0)
+                connection.socket.settimeout(1.0)
                 data = connection.socket.recv(4096)
 
                 if not data:
@@ -285,7 +291,32 @@ class TCPServer:
         """
         if event_type not in self.event_handlers:
             self.event_handlers[event_type] = []
-        self.event_handlers[event_type].append(handler)
+            self.event_handlers[event_type].append(handler)
+
+    def set_framing_engine_factory(
+        self, factory: Callable[[], FramingEngine]
+    ) -> None:
+        """Set the per-connection framing factory before server start."""
+        if self.running:
+            raise TransportError("framing factory must be set before start")
+        self.framing_engine_factory = factory
+
+    def send_to_connection(self, connection_id: str, data: bytes) -> None:
+        """Send raw bytes to a live connection."""
+        connection = self.connections.get(connection_id)
+        if connection is None or connection.state != ConnectionState.OPEN:
+            raise TransportError(
+                f"connection is not open: {connection_id}",
+                connection_id,
+            )
+        try:
+            connection.socket.sendall(data)
+        except OSError as exc:
+            connection.state = ConnectionState.ERROR
+            raise TransportError(
+                f"send failed for connection {connection_id}: {exc}",
+                connection_id,
+            ) from exc
 
     def remove_event_handler(self, event_type: str, handler: Callable) -> None:
         """Remove an event handler.

@@ -1,0 +1,67 @@
+schema_version: "1"
+id: astro-offset-provenance-v1
+version: 1
+title: Native offset use is bound to exact component identity
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: ready
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  ready:
+    on_request:
+      - id: exact-pair
+        match:
+          type: exact_text
+          value: "OFFSET app=sha-app gimbal=sha-gimbal ledger=match#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "OFFSET_ACCEPTED action=static_audit_only#"
+      - id: mismatch
+        match:
+          type: exact_text
+          value: "OFFSET app=sha-app gimbal=sha-other ledger=match#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "OFFSET_REJECTED reason=component_mismatch#"
+      - id: stale-ledger
+        match:
+          type: exact_text
+          value: "OFFSET app=sha-app gimbal=sha-gimbal ledger=stale#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "OFFSET_REJECTED reason=ledger_mismatch#"
+      - id: speculative-command
+        match:
+          type: exact_text
+          value: "AC4A axis=0 rate=0.01#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "COMMAND_BLOCKED reason=unqualified_rate_api#"
+assertions:
+  - component_hashes_are_required
+  - stale_offset_ledger_is_rejected
+  - speculative_rate_command_is_blocked

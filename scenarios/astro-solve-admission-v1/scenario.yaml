@@ -1,0 +1,68 @@
+schema_version: "1"
+id: astro-solve-admission-v1
+version: 1
+title: Astro solver results are accepted only through confidence gates
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: ready
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  ready:
+    on_request:
+      - id: strong-solve
+        match:
+          type: exact_text
+          value: "SOLVE frame=1 solved=1 matches=15 logodds=55.9 finite=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "SOLVE_ACCEPTED frame=1 action=measurement_only#"
+      - id: weak-solve
+        match:
+          type: exact_text
+          value: "SOLVE frame=1 solved=1 matches=2 logodds=3.0 finite=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "SOLVE_REJECTED reason=insufficient_matches#"
+      - id: nonfinite-solve
+        match:
+          type: exact_text
+          value: "SOLVE frame=1 solved=1 matches=15 logodds=55.9 finite=0#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "SOLVE_REJECTED reason=non_finite_result#"
+      - id: disagreement
+        match:
+          type: exact_text
+          value: "SOLVE frame=1 native=300.4 reference=101.2 agreement=0#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "SOLVE_QUARANTINED reason=solver_disagreement#"
+assertions:
+  - strong_solve_is_measurement_only
+  - weak_solve_cannot_update_state
+  - nonfinite_result_is_rejected
+  - solver_disagreement_is_quarantined

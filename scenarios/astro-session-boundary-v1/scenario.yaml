@@ -1,0 +1,83 @@
+schema_version: "1"
+id: astro-session-boundary-v1
+version: 1
+title: Astro session boundaries reject stale camera observations
+source: synthetic
+status: synthetic
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: ready
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  ready:
+    on_request:
+      - id: enter-astro
+        match:
+          type: exact_text
+          value: "ASTRO_ENTER session=2#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "ASTRO_READY session=2#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: active
+  active:
+    on_request:
+      - id: stale-completion
+        match:
+          type: exact_text
+          value: "CAPTURE_COMPLETE session=1 frame=old#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "REJECT stale_session expected=2#"
+      - id: current-completion
+        match:
+          type: exact_text
+          value: "CAPTURE_COMPLETE session=2 frame=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "ACCEPT pending_file frame=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: frame_pending
+  frame_pending:
+    on_request:
+      - id: cancel
+        match:
+          type: exact_text
+          value: "CANCEL session=2 frame=1#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "CANCELLED session=2 frame=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: active
+assertions:
+  - stale_session_is_rejected
+  - current_session_is_admitted
+  - cancellation_releases_frame_lease
