@@ -188,6 +188,23 @@ class LifecycleScenario:
                 ),
             )
 
+        # SKIP if the fixture binary does not exist locally (Stage-2 region
+        # must not be committed to GitHub — it is extracted read-only from
+        # pgphoto.stage2ondisk in the private research repo).
+        fixture = self.fixture_manager.get_fixture(self.fixture_name)
+        if fixture is None or not fixture.path.exists():
+            return LifecycleTestResult(
+                case=self.case,
+                passed=False,
+                skipped=True,
+                skip_reason=(
+                    f"fixture binary not available locally: {self.fixture_name}; "
+                    "extract pgphoto.stage2ondisk capture_image_with_Bulb region "
+                    "from the private research repo and place it at "
+                    "tests/fixtures/arm/stage2_region.bin"
+                ),
+            )
+
         emulator = self._create_emulator(command)
         result_record = emulator.run()
         contract = ArmEmulationContract.from_emulation_result(result_record)

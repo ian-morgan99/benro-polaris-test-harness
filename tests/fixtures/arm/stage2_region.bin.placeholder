@@ -7,9 +7,9 @@ and consumed by patcher issue #251.
 ## Status
 
 **NOT CHECKED IN** — The actual binary region from the v90-era
-`capture_image_with_Bulb` capture lifecycle was extracted read-only during
-review but deliberately not checked in to this repository. Redistribution of
-the blob is a decision for this repo, not an assumption to inherit.
+`capture_image_with_Bulb` capture lifecycle must NOT be published on GitHub.
+It is extracted read-only from `pgphoto.stage2ondisk` in the private research
+repository. This placeholder documents how to obtain it locally.
 
 ## Provenance (recorded from extraction)
 
@@ -28,18 +28,19 @@ the blob is a decision for this repo, not an assumption to inherit.
 | Fixture/stub profile | TBD |
 | Command | TBD |
 
-## Retrieval procedure
+## Retrieval procedure (private research repo only)
 
-The region was extracted read-only from `pgphoto.stage2ondisk` at symbol
-`capture_image_with_Bulb` (address 0x101aac, size 2176 bytes). The source
-binary was not modified. To re-obtain:
+The binary region must NOT be committed to this public repository. To obtain
+it locally:
 
-1. Locate the pgphoto.stage2ondisk binary from the v90-era firmware build.
-2. Extract the region at address 0x101aac, length 2176 bytes.
+1. In the private research repo, locate `pgphoto.stage2ondisk` from the
+   v90-era firmware build.
+2. Extract the region at address `0x101aac`, length `2176` bytes.
 3. Verify SHA-256: `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3`
-4. Place as `stage2_region.bin` in this directory.
-5. Update this file with patcher commit, harness revision, emulator version,
-   fixture/stub profile, and command.
+4. Place the extracted binary as `tests/fixtures/arm/stage2_region.bin`
+   (locally only — do NOT commit).
+5. Update this placeholder with patcher commit, harness revision, emulator
+   version, fixture/stub profile, and command.
 6. Add a test in `tests/test_arm_emulator.py` that loads and replays this
    region with explicit ABI stubs.
 
@@ -49,3 +50,4 @@ binary was not modified. To re-obtain:
 - Bind every run to input binary SHA-256, patcher commit, harness revision,
   emulator version, fixture/stub profile, command, and full machine-readable result.
 - Fail closed on unknown binary hashes/layouts.
+- The binary must NOT be published on GitHub — retrieval is local only.

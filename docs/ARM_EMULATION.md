@@ -165,8 +165,13 @@ evidence.
 
 ### Stage-2 region (`tests/fixtures/arm/stage2_region.bin`)
 
-**Placeholder** — the provenance-pinned #251 binary region has not yet been
-checked in. When available, it must be accompanied by full provenance:
+**NOT CHECKED IN** — The provenance-pinned #251 binary region must NOT be
+published on GitHub. It is extracted read-only from `pgphoto.stage2ondisk`
+in the private research repository. See
+`tests/fixtures/arm/stage2_region.bin.placeholder` for the retrieval
+procedure and provenance fields.
+
+When available locally, it must be accompanied by full provenance:
 SHA-256, patcher commit, harness revision, emulator version, fixture/stub
 profile, and command.
 

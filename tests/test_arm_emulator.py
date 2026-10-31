@@ -83,10 +83,30 @@ class TestFixtureIntegrity:
                 assert "TBD" not in line, f"Provenance field still TBD: {line.strip()}"
 
     def test_stage2_region_not_checked_in(self):
-        """Stage-2 region binary must NOT be checked in (placeholder only)."""
+        """Stage-2 region binary must NOT be checked in (private research only)."""
         bin_path = FIXTURES_DIR / "stage2_region.bin"
         assert not bin_path.exists(), (
-            f"Stage-2 region binary should not be checked in: {bin_path}"
+            f"Stage-2 region binary must not be committed: {bin_path}"
+        )
+
+    def test_stage2_region_placeholder_has_retrieval_guide(self):
+        """Placeholder must document how to obtain the binary locally."""
+        placeholder = FIXTURES_DIR / "stage2_region.bin.placeholder"
+        assert placeholder.exists()
+        content = placeholder.read_text()
+        assert "NOT CHECKED IN" in content
+        assert "pgphoto.stage2ondisk" in content
+        assert "23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3" in content
+        assert "0x101aac" in content
+        assert "2176" in content
+        assert "NOT be committed" in content or "NOT be published" in content
+
+    def test_fixture_manager_handles_missing_stage2_region(self):
+        """FixtureManager must not crash when stage2_region.bin is absent."""
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("stage2_region")
+        assert fixture is None, (
+            "stage2_region fixture must not be discovered when binary is absent"
         )
 
     def test_fixture_manager_rejects_mismatched_sha(self):
