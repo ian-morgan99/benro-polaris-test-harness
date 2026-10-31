@@ -475,6 +475,108 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
         return 2
 
 
+def sd_emulate_command(args: argparse.Namespace) -> int:
+    """Run SD-card firmware-update emulation.
+
+    Independent component: builds a Benro-shaped FAT32 volume, optionally places
+    a real packet on it, and runs the simulated update flow. Nothing is mounted,
+    flashed, or rebooted for real.
+    """
+    import json
+
+    from .sd_emulator import (
+        PacketIntegrityError,
+        PacketLayoutError,
+        UpdateOutcome,
+        build_benro_card,
+        packet_from_local_file,
+        run_update,
+    )
+
+    packets: list = []
+    payloads: dict = {}
+    if args.packet:
+        try:
+            payload = packet_from_local_file(Path(args.packet))
+        except FileNotFoundError as exc:
+            print(f"✗ {exc}")
+            return 2
+        name = Path(args.packet).name
+        # A packet renamed to something the device would not look for would
+        # silently produce NO_PACKET, so reject it here instead.
+        if name not in ("FwPkt.zip", "OmsPkt.zip"):
+            print(f"✗ packet must be named FwPkt.zip or OmsPkt.zip, got {name}")
+            return 2
+        packets.append((name, payload))
+        payloads[name] = payload
+
+    if args.oms_packet:
+        try:
+            payload = packet_from_local_file(Path(args.oms_packet))
+        except FileNotFoundError as exc:
+            print(f"✗ {exc}")
+            return 2
+        name = Path(args.oms_packet).name
+        packets.append((name, payload))
+        payloads[name] = payload
+
+    try:
+        image = build_benro_card(
+            total_bytes=args.card_size_bytes,
+            volume_label=args.volume_label,
+            log_count=args.log_count,
+            packets=packets,
+        )
+    except Exception as exc:  # geometry/allocation problems are argument errors
+        print(f"✗ could not build card image: {exc}")
+        return 2
+
+    if args.list:
+        print(f"Volume: {image.geometry.volume_bytes} bytes, "
+              f"{image.geometry.cluster_count} clusters")
+        for entry in image.list_root():
+            kind = "dir " if entry.is_directory else "file"
+            print(f"  {kind}  {entry.name}")
+        return 0
+
+    try:
+        report = run_update(
+            image,
+            current_version=args.current_version,
+            allow_downgrade=args.allow_downgrade,
+            packet_bytes=payloads or None,
+        )
+    except (PacketLayoutError, PacketIntegrityError) as exc:
+        print(f"✗ packet could not be parsed: {exc}")
+        return 2
+
+    if args.verbose:
+        for event in report.events:
+            print(f"  [{event.state.value:<14}] {event.code}: {event.message}")
+
+    print(f"outcome: {report.outcome.value}")
+    if report.succeeded:
+        print(f"  installed: {report.installed_version} "
+              f"(was {report.previous_version})")
+        print(f"  partitions: {', '.join(report.partitions_written)}")
+        print(f"  bytes written: {report.bytes_written}")
+    else:
+        for failure in report.failures:
+            print(f"  - {failure}")
+
+    if args.output:
+        Path(args.output).write_text(json.dumps(report.to_dict(), indent=2) + "\n")
+        print(f"  report written to {args.output}")
+
+    if report.succeeded:
+        return 0
+    # An absent packet or an ambiguous card is a setup condition, not a device
+    # behaviour failure, so it reports differently from a rejected update.
+    if report.outcome in (UpdateOutcome.NO_PACKET, UpdateOutcome.AMBIGUOUS_PACKETS):
+        return 2
+    return 3
+
+
 def astro_webui_command(args: argparse.Namespace) -> int:
     """Run the Astro WebUI harness server (issue #20).
 
@@ -495,8 +597,14 @@ def astro_webui_command(args: argparse.Namespace) -> int:
     return run_server(host=args.host, port=args.port, profile=args.profile)
 
 
-def main() -> int:
-    """Main CLI entry point."""
+def main(argv: list[str] | None = None) -> int:
+    """Main CLI entry point.
+
+    Args:
+        argv: argument list to parse. Defaults to sys.argv when None, so the
+            console script is unaffected and tests can drive the CLI directly
+            without patching process state.
+    """
     parser = argparse.ArgumentParser(
         prog="polaris-harness",
         description="Deterministic protocol/runtime test harness for Benro Polaris ecosystem",
@@ -512,6 +620,8 @@ Examples:
   polaris-harness trace ingest --input trace.pcap --output scenarios/
   polaris-harness arm-emulate --suite
   polaris-harness arm-emulate --fixture tiny_fixture --output result.json
+  polaris-harness sd-emulate --packet FwPkt.zip --verbose
+  polaris-harness sd-emulate --list
   polaris-harness astro-webui --profile synthetic --host 127.0.0.1 --port 8080
 
 Exit codes:
@@ -677,6 +787,47 @@ Exit codes:
     )
     arm_emulate_parser.set_defaults(func=arm_emulate_command)
 
+    # SD card emulation command (independent component)
+    sd_emulate_parser = subparsers.add_parser(
+        "sd-emulate",
+        help="Emulate a Benro SD card and run the firmware-update flow against it"
+    )
+    sd_emulate_parser.add_argument(
+        "--packet", help="Path to FwPkt.zip or OmsPkt.zip to place on the card"
+    )
+    sd_emulate_parser.add_argument(
+        "--oms-packet", help="Path to a second packet, to reproduce both-present"
+    )
+    sd_emulate_parser.add_argument(
+        "--current-version", default="4.0.0.32",
+        help="Firmware version the device reports before the update"
+    )
+    sd_emulate_parser.add_argument(
+        "--allow-downgrade", action="store_true",
+        help="Accept a packet older than the installed version"
+    )
+    sd_emulate_parser.add_argument(
+        "--card-size-bytes", type=int, default=32 * 1024 * 1024 * 1024,
+        help="Volume size in bytes (default: 32 GiB; sparse, costs no RAM)"
+    )
+    sd_emulate_parser.add_argument(
+        "--volume-label", default="BENRO", help="Volume label"
+    )
+    sd_emulate_parser.add_argument(
+        "--log-count", type=int, default=1,
+        help="Number of each log kind to create under system/log"
+    )
+    sd_emulate_parser.add_argument(
+        "--list", action="store_true", help="List the card root and exit"
+    )
+    sd_emulate_parser.add_argument(
+        "--verbose", action="store_true", help="Print every step of the flow"
+    )
+    sd_emulate_parser.add_argument(
+        "--output", help="Write the JSON report to this path"
+    )
+    sd_emulate_parser.set_defaults(func=sd_emulate_command)
+
     # Astro webui command (issue #20 - independent component)
     astro_webui_parser = subparsers.add_parser(
         "astro-webui", help="Run Astro WebUI harness server (synthetic, dry-run only)"
@@ -696,7 +847,7 @@ Exit codes:
     astro_webui_parser.set_defaults(func=astro_webui_command)
 
     # Parse arguments
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Execute command
     if hasattr(args, "func"):

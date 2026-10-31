@@ -13,3 +13,8 @@ uploads/
 # never silently un-addable on a fresh clone.
 tests/fixtures/arm/stage2_region.bin
 tests/fixtures/arm/capture_bulb_image_region.bin
+
+# Generated SD card images from sd_emulator write_to(). These are sparse and can
+# be tens of gigabytes logically; never commit one.
+*.sdcard.img
+tests/fixtures/sd/*.img
