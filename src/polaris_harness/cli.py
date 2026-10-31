@@ -24,6 +24,7 @@ from .arm_emulator import (
     run_all_lifecycle_cases,
 )
 from .arm_emulator.contract import ArmEmulationContract
+from .astro_webui import create_app, run_server
 from .runtime import RuntimeVerifier
 from .scenario_service import ScenarioService, load_scenario
 from .transport import TransportError
@@ -429,6 +430,26 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
         return 2
 
 
+def astro_webui_command(args: argparse.Namespace) -> int:
+    """Run the Astro WebUI harness server (issue #20).
+
+    This is an independent component that serves synthetic Astro static assets
+    and implements a documented synthetic Astro API surface. All actions are
+    dry-run only — the harness never contacts or mutates a physical Polaris.
+    """
+    if args.profile != "synthetic":
+        print(f"✗ Unknown profile: {args.profile}. Only 'synthetic' is supported.")
+        return 2
+
+    print("Starting Astro WebUI harness server (issue #20)")
+    print(f"  Profile: {args.profile}")
+    print(f"  Host: {args.host}")
+    print(f"  Port: {args.port} (0 = ephemeral)")
+    print("  Mode: dry-run only — no physical Polaris or camera contact")
+
+    return run_server(host=args.host, port=args.port, profile=args.profile)
+
+
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -446,6 +467,7 @@ Examples:
   polaris-harness trace ingest --input trace.pcap --output scenarios/
   polaris-harness arm-emulate --suite
   polaris-harness arm-emulate --fixture tiny_fixture --output result.json
+  polaris-harness astro-webui --profile synthetic --host 127.0.0.1 --port 8080
 
 Exit codes:
   0  success / contract satisfied
@@ -605,6 +627,24 @@ Exit codes:
         "--output", help="Output JSON contract file path"
     )
     arm_emulate_parser.set_defaults(func=arm_emulate_command)
+
+    # Astro webui command (issue #20 - independent component)
+    astro_webui_parser = subparsers.add_parser(
+        "astro-webui", help="Run Astro WebUI harness server (synthetic, dry-run only)"
+    )
+    astro_webui_parser.add_argument(
+        "--profile", default="synthetic",
+        help="Profile name (default: synthetic)"
+    )
+    astro_webui_parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Host to bind to (default: 127.0.0.1)"
+    )
+    astro_webui_parser.add_argument(
+        "--port", type=int, default=0,
+        help="Port to bind to (default: 0 = ephemeral)"
+    )
+    astro_webui_parser.set_defaults(func=astro_webui_command)
 
     # Parse arguments
     args = parser.parse_args()

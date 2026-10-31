@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Astro WebUI - Polaris Test Harness (Synthetic)</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Astro WebUI</h1>
+            <div class="status-badge" id="status-badge">SYNTHETIC - DRY RUN</div>
+        </header>
+
+        <nav>
+            <button onclick="showSection('dashboard')">Dashboard</button>
+            <button onclick="showSection('capture')">Capture</button>
+            <button onclick="showSection('solve')">Platesolve</button>
+            <button onclick="showSection('goto')">GOTO</button>
+            <button onclick="showSection('diagnostics')">Diagnostics</button>
+        </nav>
+
+        <section id="dashboard" class="panel active">
+            <h2>Camera State</h2>
+            <div class="state-grid">
+                <div class="state-item">
+                    <label>Mount Status</label>
+                    <span id="mount-status" class="value unknown">--</span>
+                </div>
+                <div class="state-item">
+                    <label>Camera Ready</label>
+                    <span id="camera-ready" class="value unknown">--</span>
+                </div>
+                <div class="state-item">
+                    <label>Tracking</label>
+                    <span id="tracking-status" class="value unknown">--</span>
+                </div>
+                <div class="state-item">
+                    <label>Rate Control</label>
+                    <span id="rate-control" class="value unavailable">unavailable</span>
+                </div>
+            </div>
+            <div class="result-area" id="dashboard-result"></div>
+        </section>
+
+        <section id="capture" class="panel">
+            <h2>Capture</h2>
+            <div class="form-group">
+                <label for="capture-exposure">Exposure (ms):</label>
+                <input type="number" id="capture-exposure" value="1000" min="1">
+            </div>
+            <div class="form-group">
+                <label for="capture-iso">ISO:</label>
+                <input type="number" id="capture-iso" value="800" min="100" max="6400">
+            </div>
+            <button class="btn-primary" onclick="doCapture()">Start Capture</button>
+            <div class="result-area" id="capture-result"></div>
+        </section>
+
+        <section id="solve" class="panel">
+            <h2>Platesolve</h2>
+            <div class="form-group">
+                <label for="solve-image">Image ID:</label>
+                <input type="text" id="solve-image" value="capture_001">
+            </div>
+            <button class="btn-primary" onclick="doSolve()">Run Solve</button>
+            <div class="result-area" id="solve-result"></div>
+        </section>
+
+        <section id="goto" class="panel">
+            <h2>GOTO / Target</h2>
+            <div class="form-group">
+                <label for="goto-ra">RA (hours):</label>
+                <input type="number" id="goto-ra" value="0" step="0.001">
+            </div>
+            <div class="form-group">
+                <label for="goto-dec">Dec (degrees):</label>
+                <input type="number" id="goto-dec" value="0" step="0.001">
+            </div>
+            <button class="btn-primary" onclick="doGoto()">Slew to Target</button>
+            <div class="result-area" id="goto-result"></div>
+        </section>
+
+        <section id="diagnostics" class="panel">
+            <h2>Diagnostics</h2>
+            <button class="btn-primary" onclick="refreshDiagnostics()">Refresh Diagnostics</button>
+            <div class="result-area" id="diagnostics-result"></div>
+        </section>
+
+        <footer>
+            <p>Benro Polaris Test Harness - Astro WebUI (Synthetic)</p>
+            <p><small>All actions are dry-run. No physical Polaris or camera is contacted.</small></p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+{
+  "description": "Provenance manifest for Astro WebUI static assets (synthetic, issue #20)",
+  "source_issue": "ian-morgan99/benro-polaris-test-harness#20",
+  "source_repository": "ian-morgan99/benro-polaris-test-harness",
+  "license": "GPL-3.0-only",
+  "provenance": "synthetic",
+  "ui_asset_commit": "synthetic-20261031",
+  "assets": {
+    "index.html": {
+      "sha256": "042e7cd4bbe40ceca34a46c63dd1e64d1132a09c77f7225686a51958d564ceba",
+      "size_bytes": 1347,
+      "content_type": "text/html"
+    },
+    "app.js": {
+      "sha256": "0e3444b5ed2b14c10de191633a3c22323c808ec60449c2c89136269f6421b27b",
+      "size_bytes": 1523,
+      "content_type": "application/javascript"
+    },
+    "style.css": {
+      "sha256": "3a264a90c53056f81282a31ac5ea5782a51e1176f57a483dbd6c392543b218cb",
+      "size_bytes": 2048,
+      "content_type": "text/css"
+    }
+  },
+  "constraints": [
+    "No Benro Connect APK or decompiled assets",
+    "No physical Polaris or camera qualification",
+    "All motion and firmware actions are dry-run only",
+    "Rate control remains explicitly unavailable unless separately qualified"
+  ]
+}
