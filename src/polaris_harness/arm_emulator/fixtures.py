@@ -47,6 +47,7 @@ class FixtureMetadata:
     mode: Optional[str] = None
     entry_address: Optional[int] = None
     code_address: Optional[int] = None
+    load_address: Optional[int] = None
     code_size: Optional[int] = None
     max_instructions: Optional[int] = None
     # SHA-256 recorded in the sidecar. When present, discovery verifies the
@@ -84,6 +85,7 @@ class FixtureManager:
             mode = None
             entry_address = None
             code_address = None
+            load_address = None
             code_size = None
             max_instructions = None
             expected_sha256 = None
@@ -101,6 +103,7 @@ class FixtureManager:
                     mode = prov.get("mode")
                     entry_address = self._coerce_int(prov.get("entry_address"))
                     code_address = self._coerce_int(prov.get("code_address"))
+                    load_address = self._coerce_int(prov.get("load_address"))
                     code_size = self._coerce_int(prov.get("code_size"))
                     max_instructions = self._coerce_int(
                         prov.get("max_instructions"))
@@ -124,6 +127,7 @@ class FixtureManager:
                 mode=mode,
                 entry_address=entry_address,
                 code_address=code_address,
+                load_address=load_address,
                 code_size=code_size,
                 max_instructions=max_instructions,
                 expected_sha256=expected_sha256,
@@ -292,6 +296,8 @@ class FixtureManager:
         # Sidecar-level memory/limit overrides, still subordinate to kwargs.
         if fixture.code_address is not None:
             config.code_address = int(fixture.code_address)
+        if fixture.load_address is not None:
+            config.load_address = int(fixture.load_address)
         if fixture.code_size is not None:
             config.code_size = int(fixture.code_size)
         if fixture.max_instructions is not None:

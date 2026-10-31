@@ -65,6 +65,17 @@ class EmulationConfig:
     stack_size: int = 0x1000
     code_address: int = 0x1000
     code_size: int = 0x10000
+    # Absolute address at which the artifact belongs in the original process
+    # image. When set, the blob is written here instead of at code_address,
+    # while code_address/code_size still define the mapped page range.
+    #
+    # This matters for regions lifted out of an ELF: ARM code commonly resolves
+    # globals with `ldr rN, [pc, #imm]` followed by `add rN, pc, rN`, so the
+    # computed address depends on where the code actually sits. Loading such a
+    # region at a relocated base makes those loads point at unrelated memory and
+    # the run faults on its first data access. Set load_address to the symbol's
+    # original vaddr and make code_address/code_size cover it.
+    load_address: Optional[int] = None
     timeout_ms: int = 5000
     max_instructions: int = 100000
     mode: str = "thumb"
@@ -202,36 +213,62 @@ class ARMEmulator:
                 f"without running the artifact."
             )
 
-        # The mapped region may be larger than the artifact. Entry must land on
-        # real bytes, not on the zero fill between the end of the blob and the
-        # end of the mapping: Unicorn happily decodes zeros (MOV R0,R0 / UDF
-        # patterns aside) and a run that never touches the artifact can still
-        # finish cleanly and report PASS.
+        # The mapped region may be larger than the artifact, and with
+        # load_address set the artifact need not start at code_address at all.
+        # Entry must still land on real bytes: Unicorn happily decodes zeros, so
+        # a run that never touches the artifact can finish cleanly and report
+        # PASS.
         try:
             blob_length = self._binary_length(config.binary_path)
         except OSError as exc:
             raise ValueError(
                 f"Cannot read binary {config.binary_path}: {exc}"
             ) from exc
+
+        load_address = (
+            config.load_address
+            if config.load_address is not None
+            else config.code_address
+        )
+        # Validate placement before the entry point: an invalid load address is
+        # the more fundamental error, and reporting it first keeps diagnostics
+        # actionable.
+        load_address = (
+            config.load_address
+            if config.load_address is not None
+            else config.code_address
+        )
+        if not (
+            config.code_address
+            <= load_address
+            <= config.code_address + config.code_size
+        ):
+            raise ValueError(
+                f"load_address {hex(load_address)} is outside the mapped region "
+                f"[{hex(config.code_address)}, "
+                f"{hex(config.code_address + config.code_size)})."
+            )
         if blob_length > config.code_size:
             raise ValueError(
                 f"binary is {blob_length} bytes but code_size is "
                 f"{config.code_size}; the artifact would be truncated."
             )
+        if load_address + blob_length > config.code_address + config.code_size:
+            raise ValueError(
+                f"artifact at load_address {hex(load_address)} plus "
+                f"{blob_length} bytes exceeds the mapped region ending at "
+                f"{hex(config.code_address + config.code_size)}."
+            )
         if not (
-            config.code_address
-            <= config.entry_address
-            < config.code_address + blob_length
+            load_address <= config.entry_address < load_address + blob_length
         ):
             raise ValueError(
-                f"entry_address {hex(config.entry_address)} lies beyond the "
-                f"{blob_length}-byte artifact loaded at "
-                f"{hex(config.code_address)} (ends at "
-                f"{hex(config.code_address + blob_length)}). Execution would run "
-                f"zero-filled pages and could report PASS without ever executing "
-                f"the artifact. Set entry_address to the load address, or load "
-                f"the region at a page-aligned base derived from its symbol "
-                f"address."
+                f"entry_address {hex(config.entry_address)} lies outside the "
+                f"{blob_length}-byte artifact loaded at {hex(load_address)} "
+                f"(ends at {hex(load_address + blob_length)}). Execution would "
+                f"run zero-filled pages and could report PASS without ever "
+                f"executing the artifact. Set entry_address to the load address, "
+                f"or set load_address to the region's original ELF vaddr."
             )
 
     def register_stub(self, name: str, handler: Callable) -> None:
@@ -659,12 +696,22 @@ class ARMEmulator:
     def _setup_memory(self, binary_data: bytes) -> None:
         """Set up Unicorn memory mappings.
 
+        The artifact is written at ``load_address`` when one is configured, so a
+        region taken from an ELF executes at the address its PC-relative
+        references were assembled against. Otherwise it is written at
+        ``code_address``.
+
         Args:
             binary_data: Raw binary bytes to map into code space
         """
         # Map code region
         self._uc.mem_map(self.config.code_address, self.config.code_size)
-        self._uc.mem_write(self.config.code_address, binary_data)
+        load_address = (
+            self.config.load_address
+            if self.config.load_address is not None
+            else self.config.code_address
+        )
+        self._uc.mem_write(load_address, binary_data)
 
         # Map stack region
         self._uc.mem_map(self.config.stack_address, self.config.stack_size)

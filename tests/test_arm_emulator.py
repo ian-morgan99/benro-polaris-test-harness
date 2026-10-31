@@ -509,10 +509,44 @@ class TestLayoutFailClosed:
     def test_entry_beyond_blob_is_rejected(self, tmp_path):
         """Entry past the loaded bytes would run zero-fill and report PASS."""
         blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
-        with pytest.raises(ValueError, match="lies beyond"):
+        with pytest.raises(ValueError, match="lies outside the .* artifact"):
             ARMEmulator(self._cfg(
                 tmp_path, blob, entry_address=0x1abc, code_address=0x1000,
             ))
+
+    def test_load_address_outside_mapping_is_rejected(self, tmp_path):
+        """A blob cannot be written outside the page range Unicorn maps."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        with pytest.raises(ValueError, match="load_address .* outside the mapped"):
+            ARMEmulator(self._cfg(
+                tmp_path, blob, entry_address=0x1000, code_address=0x1000,
+                code_size=0x2000, load_address=0x9000,
+            ))
+
+    def test_blob_overrunning_mapping_is_rejected(self, tmp_path):
+        """load_address + blob length must stay inside the mapped region."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        with pytest.raises(ValueError, match="exceeds the mapped region"):
+            ARMEmulator(self._cfg(
+                tmp_path, blob, entry_address=0x1000, code_address=0x1000,
+                load_address=0x1ffc,
+            ))
+
+    def test_load_address_at_true_vaddr_runs(self, tmp_path):
+        """A region loaded at its original vaddr executes from there.
+
+        Regions lifted from an ELF resolve globals via PC-relative literal
+        loads, so they must execute at the address they were assembled against;
+        the mapping just has to be page aligned and cover them.
+        """
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        cfg = self._cfg(
+            tmp_path, blob, entry_address=0x1aac, code_address=0x1000,
+            load_address=0x1aac,
+        )
+        result = ARMEmulator(cfg).run()
+        assert result.result == EmulationResult.PASS
+        assert result.instructions_executed == 2
 
     def test_entry_outside_mapped_region_is_rejected(self, tmp_path):
         blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)

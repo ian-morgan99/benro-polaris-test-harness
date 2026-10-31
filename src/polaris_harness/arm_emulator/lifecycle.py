@@ -114,6 +114,11 @@ class LifecycleScenario:
         self.stub_registry = StubRegistry()
         self._setup_stubs()
 
+    # Boundary function names this case's assertions depend on. A fixture whose
+    # sidecar declares none of them cannot exercise the case, and that is a
+    # fixture/case mismatch rather than a behavioural failure.
+    expected_boundary_functions: tuple = ()
+
     def _setup_stubs(self) -> None:
         """Set up stubs for this scenario. Override in subclasses."""
         profile = create_default_profile()
@@ -159,11 +164,15 @@ class LifecycleScenario:
                 f"Fixture {self.fixture_name} disappeared between validation and "
                 f"emulator construction."
             )
+        coerce = FixtureManager._coerce_int
         for entry in fixture.stub_entries:
-            address = entry.get("address")
+            address = coerce(entry.get("address"))
             stub_name = entry.get("stub_name")
             if address is None or stub_name is None:
-                continue
+                raise KeyError(
+                    f"Fixture {self.fixture_name} declares a stub entry with a "
+                    f"missing or unparseable address/stub_name: {entry!r}"
+                )
             if stub_name not in emulator._stub_registry:
                 # Fail closed: a declared entry for an unregistered stub means
                 # the fixture and profile disagree about the boundary.
@@ -173,7 +182,7 @@ class LifecycleScenario:
                 )
             emulator.register_stub_entry(
                 stub_name,
-                int(address),
+                address,
                 function_name=entry.get("function_name"),
                 abi_shape=entry.get("abi_shape"),
                 model=entry.get("model", "call-site"),
@@ -272,6 +281,30 @@ class LifecycleScenario:
         contract = ArmEmulationContract.from_emulation_result(result_record)
 
         assertion_errors = self._assertions(contract)
+
+        # When a case asserts on boundary names this fixture never declares, the
+        # failure is a fixture/case mismatch rather than a behavioural
+        # regression. Say so explicitly: without this, "Expected exactly 1 stop
+        # call, got 0" reads as though the patcher broke stop/close handling,
+        # when in fact the pinned region does not contain that edge at all.
+        declared = {
+            e.get("function_name")
+            for e in fixture.stub_entries
+            if e.get("function_name")
+        }
+        missing = [
+            name for name in self.expected_boundary_functions
+            if name not in declared
+        ]
+        if missing:
+            assertion_errors.insert(0, (
+                f"fixture {self.fixture_name} declares no boundary named "
+                f"{', '.join(sorted(missing))}; this case cannot be evaluated "
+                f"against this artifact. Declared boundaries: "
+                f"{', '.join(sorted(n for n in declared if n)) or '(none)'}. "
+                f"Pin the region that owns these edges instead."
+            ))
+
         passed = contract.is_pass() and len(assertion_errors) == 0
 
         return LifecycleTestResult(
@@ -288,6 +321,8 @@ class LifecycleScenario:
 
 class Case1NormalBulbCompletion(LifecycleScenario):
     """Normal held-Bulb completion with exactly one stop/close."""
+
+    expected_boundary_functions = ("stop", "close")
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -335,6 +370,8 @@ class Case1NormalBulbCompletion(LifecycleScenario):
 class Case2MessageStopVsContextCancel(LifecycleScenario):
     """Explicit message-stop and context-cancel as distinct routes."""
 
+    expected_boundary_functions = ("message_stop", "context_cancel")
+
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
         profile.register_all(self.stub_registry)
@@ -378,6 +415,8 @@ class Case2MessageStopVsContextCancel(LifecycleScenario):
 class Case3CancelResultSurvivesStop(LifecycleScenario):
     """Cancellation result surviving a successful stop callback."""
 
+    expected_boundary_functions = ("stop", "cancel")
+
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
         profile.register_all(self.stub_registry)
@@ -420,6 +459,8 @@ class Case3CancelResultSurvivesStop(LifecycleScenario):
 
 class Case4StopFailurePreservesPrimaryError(LifecycleScenario):
     """Stop failure preserving the correct primary error without masking it."""
+
+    expected_boundary_functions = ("stop",)
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -626,6 +667,9 @@ class Case7CallbackOrderingRegisterPreservation(LifecycleScenario):
 class Case8OutputPublicationCleanup(LifecycleScenario):
     """Output publication/completion signaling and cleanup."""
 
+    expected_boundary_functions = (
+        "publish_output", "signal_completion", "cleanup")
+
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
         profile.register_all(self.stub_registry)
@@ -682,6 +726,9 @@ class Case8OutputPublicationCleanup(LifecycleScenario):
 
 class Case9ManualNonBControl(LifecycleScenario):
     """Ordinary Manual/non-B dispatch and a non-Pentax/shared-helper control case."""
+
+    expected_boundary_functions = (
+        "manual_dispatch", "non_b_capture", "shared_helper")
 
     def _setup_stubs(self) -> None:
         profile = create_strict_profile()

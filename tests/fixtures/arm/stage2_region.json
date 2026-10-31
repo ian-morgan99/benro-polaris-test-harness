@@ -8,32 +8,332 @@
     "symbol_vaddr": "0x101aac",
     "size_bytes": 2176,
     "mode": "arm",
-    "entry_address": "0x1000",
-    "code_address": "0x1000",
-    "code_size": 4096,
-    "layout_note": "entry_address and code_address are the RELOCATED load address used by the emulator, not the original ELF symbol address. The blob is written at code_address and execution starts at entry_address, so for a 2176-byte blob entry_address must equal code_address. symbol_vaddr records the true ELF address for provenance only. ARMEmulator now rejects (fail closed) any layout where entry_address falls outside the loaded bytes: such a run executes zero-filled pages and can report PASS without ever touching the artifact. The absolute symbol address 0x101aac is not page aligned, so it cannot be used as code_address directly; use a page-aligned base such as 0x1000 or 0x101000.",
-    "max_instructions": 3000,
+    "entry_address": "0x101aac",
+    "code_address": "0x101000",
+    "code_size": 2166784,
+    "layout_note": "The region must load at its original vaddr (load_address 0x101aac). It resolves globals with `ldr rN,[pc,#imm]` + `add rN,pc,rN`, whose literal pool words are PC-relative deltas; loading at a relocated base makes those loads compute unrelated addresses and the run faults on its first data access. code_address/code_size map a page-aligned range covering both the blob and the two referenced globals (.got 0x2f6ffc, .data 0x310fd0). Those globals are zero-filled: their real contents are not in the extracted region, so control flow that depends on them is approximate.",
+    "max_instructions": 5000,
     "elf_flags": "0x5000200 (Version5 EABI, soft-float ABI)",
     "patcher_commit": "8c015c0a73c8affea8fa723badcceb4070ef81b4",
     "harness_revision_at_pinning": "9e7afdc",
     "emulator_version": "unicorn-2.1.4",
     "fixture_stub_profile": "lifecycle",
     "command": "capture_image_with_Bulb",
-    "stub_entries": [],
-    "stub_entries_note": "Deliberately empty. The region contains 42 BL/BLX sites whose targets lie outside the extracted window, so their semantic identities (camera/libgphoto/timer/callback) cannot be resolved from the region alone. Resolving them requires the source ELF's symbol table, which is not retained. Declaring addresses here without verified names would invent a boundary contract, which issue #15 forbids.",
+    "stub_entries": [
+      {
+        "address": "0x101b08",
+        "target": "0xfd32c",
+        "stub_name": "camera",
+        "function_name": "waitCameraIdle",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101b24",
+        "target": "0x101008",
+        "stub_name": "camera",
+        "function_name": "numOfCaptureImage",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101b40",
+        "target": "0xfd2ec",
+        "stub_name": "camera",
+        "function_name": "setCameraStatus",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101b74",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101ba4",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101bb4",
+        "target": "0x14bf4",
+        "stub_name": "os",
+        "function_name": "sqrt",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101c28",
+        "target": "0x14f0c",
+        "stub_name": "os",
+        "function_name": "textdomain",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101c48",
+        "target": "0xfc1b4",
+        "stub_name": "callback",
+        "function_name": "cb_arg_run",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101c64",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101c94",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101cc8",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101cf0",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101d14",
+        "target": "0x14bf4",
+        "stub_name": "os",
+        "function_name": "sqrt",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101d24",
+        "target": "0x14bf4",
+        "stub_name": "os",
+        "function_name": "sqrt",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101d90",
+        "target": "0x1a62c",
+        "stub_name": "timer",
+        "function_name": "delayTime",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101dcc",
+        "target": "0xfa60c",
+        "stub_name": "camera",
+        "function_name": "wait_and_handle_event",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101e1c",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101e44",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101e6c",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101e94",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101ebc",
+        "target": "0x14f0c",
+        "stub_name": "os",
+        "function_name": "textdomain",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101edc",
+        "target": "0xfc1b4",
+        "stub_name": "callback",
+        "function_name": "cb_arg_run",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101f30",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101f58",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101f6c",
+        "target": "0xfa60c",
+        "stub_name": "camera",
+        "function_name": "wait_and_handle_event",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101fa8",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x101fd0",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x102014",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x10203c",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x1020c4",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x1020ec",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x102110",
+        "target": "0x1541c",
+        "stub_name": "os",
+        "function_name": "isatty",
+        "model": "call-site"
+      },
+      {
+        "address": "0x10211c",
+        "target": "0xf9f08",
+        "stub_name": "timer",
+        "function_name": "timediff_now",
+        "model": "call-site"
+      },
+      {
+        "address": "0x10213c",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x10216c",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x10217c",
+        "target": "0x14bf4",
+        "stub_name": "os",
+        "function_name": "sqrt",
+        "model": "call-site"
+      },
+      {
+        "address": "0x102184",
+        "target": "0x100748",
+        "stub_name": "camera",
+        "function_name": "getImageToBuffer",
+        "model": "call-site"
+      },
+      {
+        "address": "0x102194",
+        "target": "0xf9f08",
+        "stub_name": "timer",
+        "function_name": "timediff_now",
+        "model": "call-site"
+      },
+      {
+        "address": "0x1021b4",
+        "target": "0xe7c24",
+        "stub_name": "libgphoto",
+        "function_name": "gp_log",
+        "model": "call-site"
+      },
+      {
+        "address": "0x1021e4",
+        "target": "0x1ece94",
+        "stub_name": "os",
+        "function_name": "HI_LOG_Print",
+        "model": "call-site"
+      },
+      {
+        "address": "0x10220c",
+        "target": "0x1541c",
+        "stub_name": "os",
+        "function_name": "isatty",
+        "model": "call-site"
+      },
+      {
+        "address": "0x102214",
+        "target": "0xfd2ec",
+        "stub_name": "camera",
+        "function_name": "setCameraStatus",
+        "model": "call-site"
+      }
+    ],
+    "stub_entries_note": "All 42 BL sites resolved from the retained source ELF: 10 via .symtab FUNC entries and 3 via .rel.plt -> .dynsym (sqrt, textdomain, isatty). model is call-site because the intercepted address is the BL instruction inside the mapped blob; the callee bodies are outside the extracted window. Stub grouping is semantic: camera state/capture calls to 'camera', gp_log to 'libgphoto', HI_LOG_Print/sqrt/textdomain/isatty to 'os', timediff_now/delayTime to 'timer', cb_arg_run to 'callback'.",
     "observed_behaviour": {
       "mode": "arm",
-      "instructions_executed": 15,
-      "result": "unsupported_instruction",
-      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED)",
-      "fault_address": "0x1038",
-      "interpretation": "ARM decoding is correct: the region's real instructions execute. The run then faults reading a pointer argument that was never initialised, because no caller frame or stub wiring exists yet. Full lifecycle execution needs AAPCS argument setup plus resolved stub entries."
+      "instructions_executed": 5001,
+      "result": "timeout",
+      "stub_calls_recorded": 8,
+      "first_stub": "setCameraStatus at 0x101b40",
+      "interpretation": "With load_address set and the 42 call sites registered, execution passes the former instruction-15 fault and reaches real boundary calls. It then loops: the zero-filled globals make a status/timeout test never satisfy its exit condition, so the run hits max_instructions. That is an environment-fidelity limit, not a decoding failure."
     },
     "source_retention_gap": {
-      "status": "UNRESOLVED",
-      "detail": "The pinned region does NOT match the same symbol/size extracted from the retained stock baseline pgphoto.stock (Benro 4.0.0.32), which hashes 333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19 at the same entry 0x101aac and size 2176. The pinned blob is therefore a patched build, not stock. The v90-era source binary that produced it is not retained anywhere on this host; only the extracted region survives. Until the owning build is identified and retained, this region cannot be re-derived from a firmware zip or device pull.",
-      "stock_baseline_sha256": "0308393632dd41d974bd1064e61942655131fe5392959a334cf24623d1bd4a62",
-      "stock_region_sha256": "333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19"
-    }
+      "status": "RESOLVED",
+      "detail": "The pinned region comes from pgphoto.stage2ondisk of firmware 6.0.0.54.90 (o-v18m-k1ii-pgphoto-readiness-20261029), retained at the path in source_binary_retained_at and reproducible: extracting offset 0xf1aac for 2176 bytes yields this region's SHA-256 exactly. An earlier revision of this file claimed the source was not retained; that was a search-scope error.",
+      "stock_comparison": "Same symbol/size extracted from stock pgphoto.stock (Benro 4.0.0.32) hashes 333a3f66... instead, confirming this is the patched o-v18m build rather than stock."
+    },
+    "source_binary_sha256": "8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac",
+    "source_binary_retained_at": "PrivateResearch firmware-packets/6.0.0.54.90--o-v18m-k1ii-pgphoto-readiness-20261029/extracted_appfs/stage2-ondisk/ondisk/pgphoto.stage2ondisk",
+    "firmware_version": "6.0.0.54.90",
+    "patcher_ref": "f344e41/main",
+    "libgphoto2_commit": "63a894b0821a510fc40244c5cc4ef84a5220a91c",
+    "load_address": "0x101aac"
   }
 }

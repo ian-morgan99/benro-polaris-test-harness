@@ -16,13 +16,15 @@ repository. This placeholder documents how to obtain it locally.
 | Field | Value |
 |-------|-------|
 | Source issue | ian-morgan99/benro-polaris-firmware-patcher#251 |
-| Source binary | pgphoto.stage2ondisk (v90-era) |
+| Source binary | pgphoto.stage2ondisk — firmware 6.0.0.54.90, `o-v18m-k1ii-pgphoto-readiness-20261029` |
+| Source binary SHA-256 | 8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac |
 | Symbol | capture_image_with_Bulb |
 | Entry address | 0x101aac |
 | Size | 2176 bytes |
 | Mode | arm (ELF flags 0x5000200, Version5 EABI, soft-float ABI) |
-| Binary SHA-256 | 23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3 |
-| Patcher commit | 8c015c0a73c8affea8fa723badcceb4070ef81b4 |
+| Region SHA-256 | 23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3 |
+| Patcher ref | f344e41/main |
+| libgphoto2 commit | 63a894b0821a510fc40244c5cc4ef84a5220a91c |
 | Harness revision | 9e7afdc (provenance recorded 2026-10-31) |
 | Emulator version | unicorn-2.1.4 |
 | Fixture/stub profile | lifecycle (camera/libgphoto/os/timer/callback, per-boundary `abi_shape`) |
@@ -46,25 +48,78 @@ words whose byte signature is `10 48 2d e9 08 b0 8d e2 d4 d0 4d e2`, i.e.
 `STMFD SP!, {...}` / `LDR R8, [SP,#imm]` / `ADD R8, SP, #imm` — the documented
 #251 prologue. Confirm this signature before trusting any extracted blob.
 
-## Source retention gap (unresolved)
+## Source binary (retained)
 
-The pinned region is **not** the stock build. Extracting the same symbol at the
-same address and size from the retained stock baseline (`pgphoto.stock`, Benro
-4.0.0.32, SHA-256 `0308393632dd41d974bd1064e61942655131fe5392959a334cf24623d1bd4a62`)
-yields region SHA-256
-`333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19`, which differs
-from the pinned value. The prologue is identical, so the function's shape is the
-same but its body was modified — the pinned blob is a **patched** build.
+The region is extracted from `pgphoto.stage2ondisk` of firmware **6.0.0.54.90**
+(`o-v18m-k1ii-pgphoto-readiness-20261029`, patcher ref `f344e41/main`,
+libgphoto2 `63a894b0821a510fc40244c5cc4ef84a5220a91c`).
 
-The v90-era source binary that produced the pinned region is not retained on the
-build host: it is absent from every extracted `pgphoto.stage2ondisk` under the
-patcher and research trees, from the stock baseline, and from the unpacked
-`appfs.ubifs` images. Only the extracted region survives.
+| field | value |
+|---|---|
+| source binary SHA-256 | `8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac` |
+| retained at | `PrivateResearch firmware-packets/6.0.0.54.90--o-v18m-k1ii-pgphoto-readiness-20261029/extracted_appfs/stage2-ondisk/ondisk/pgphoto.stage2ondisk` |
+| durable packet | `.../FwPkt.zip` (LFS-tracked, zip MD5 `4c005b0acf50676fa7e1d32ffbac9cd6`) |
 
-Consequence: this region cannot currently be re-derived from a firmware zip or a
-device pull. Before it can be treated as a durable contract, the owning build
-must be identified and its source binary retained in the private research repo,
-with its SHA-256 recorded here.
+Re-derivation is verified: extracting offset `0xf1aac` for 2176 bytes from the
+retained copy yields this region's SHA-256 exactly.
+
+An earlier revision of this file stated the source binary was not retained
+anywhere on the host. That was wrong — a search-scope error (the build tree
+`/home/ian/polaris-build-73/out/` was not searched, and it is gitignored in that
+repository). The copy under `out/` is still volatile, which is why the retained
+copy above exists.
+
+## Why this region is not the stock build
+
+Extracting the same symbol at the same address and size from the retained stock
+baseline (`pgphoto.stock`, Benro 4.0.0.32, SHA-256
+`0308393632dd41d974bd1064e61942655131fe5392959a334cf24623d1bd4a62`) yields region
+SHA-256 `333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19`. The
+prologue is identical but the body differs, so the pinned blob is the patched
+o-v18m build rather than stock. This is expected, not a defect.
+
+## Resolved external call targets
+
+All 42 BL sites were resolved from the retained ELF — 10 via `.symtab` FUNC
+entries, 3 via `.rel.plt` → `.dynsym`:
+
+| callee | stub group | sites |
+|---|---|---|
+| `gp_log` | libgphoto | 11 |
+| `HI_LOG_Print` | os | 11 |
+| `sqrt` (PLT) | os | 4 |
+| `setCameraStatus` | camera | 2 |
+| `wait_and_handle_event` | camera | 2 |
+| `cb_arg_run` | callback | 2 |
+| `timediff_now` | timer | 2 |
+| `textdomain` (PLT) | os | 2 |
+| `isatty` (PLT) | os | 2 |
+| `waitCameraIdle` | camera | 1 |
+| `numOfCaptureImage` | camera | 1 |
+| `getImageToBuffer` | camera | 1 |
+| `delayTime` | timer | 1 |
+
+These are recorded in `stage2_region.json` as `stub_entries`, using
+`"model": "call-site"` because the intercepted address is the `BL` instruction
+inside the mapped blob; the callee bodies lie outside the extracted window.
+
+## Lifecycle vocabulary mismatch
+
+None of the 13 callees is named `stop`, `close`, `cancel`, `message_stop` or
+`context_cancel`, yet those are what the nine lifecycle cases assert on. The
+owners are elsewhere in the same binary:
+
+| symbol | address | size | called from |
+|---|---|---|---|
+| `stopCaptureImageForMessage` | `0x202e4` | 108 | `captureBulbImage`, `sonyBurstEvent` |
+| `stopCaptureContinuContinuous` | `0x20350` | 156 | — |
+| `captureBulbImage` | `0x20604` | 684 | — |
+| `gp_context_cancel` | `0x358d0` | 104 | 27 libgphoto call sites |
+| `gp_camera_stop_timeout` | `0x35158` | 476 | `gp_camera_exit` |
+
+So the message-driven stop edge is owned by `stopCaptureImageForMessage`,
+reached from `captureBulbImage` — not by `capture_image_with_Bulb`. Testing
+those edges needs its own pinned region (see harness issue #19).
 
 ## Retrieval procedure (private research repo only)
 
