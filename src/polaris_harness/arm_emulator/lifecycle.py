@@ -153,7 +153,13 @@ class LifecycleScenario:
             emulator.set_stub_abi_shape(name, shape)
 
         # Register stub entry addresses declared by the fixture sidecar.
-        for entry in self.fixture_manager.get_fixture(self.fixture_name).stub_entries:
+        fixture = self.fixture_manager.get_fixture(self.fixture_name)
+        if fixture is None:
+            raise ValueError(
+                f"Fixture {self.fixture_name} disappeared between validation and "
+                f"emulator construction."
+            )
+        for entry in fixture.stub_entries:
             address = entry.get("address")
             stub_name = entry.get("stub_name")
             if address is None or stub_name is None:
@@ -232,6 +238,32 @@ class LifecycleScenario:
                     "extract pgphoto.stage2ondisk capture_image_with_Bulb region "
                     "from the private research repo and place it at "
                     "tests/fixtures/arm/stage2_region.bin"
+                ),
+            )
+
+        # SKIP when the fixture declares no stub entries. Every lifecycle case
+        # asserts on boundary events (stop/close/cancel/timer/callback), and
+        # those events can only be observed if the region's external call
+        # targets are registered as stubs. Without them the real code faults on
+        # its first unmapped reference and every assertion reports "not
+        # observed" — which would read as a patcher regression when it is
+        # actually an unresolved fixture contract.
+        #
+        # This is deliberately narrower than skipping whenever the run fails:
+        # once stub_entries are declared, any remaining assertion failure is a
+        # genuine behavioural signal and must still exit 3.
+        if not fixture.stub_entries:
+            return LifecycleTestResult(
+                case=self.case,
+                passed=False,
+                skipped=True,
+                skip_reason=(
+                    f"fixture {self.fixture_name} declares no stub_entries; its "
+                    "external call targets are unresolved, so boundary events "
+                    "(stop/close/cancel/timer/callback) cannot be observed. "
+                    "Resolve them from the source ELF's symbol table and record "
+                    "them in the fixture sidecar before treating these cases as "
+                    "behavioural evidence."
                 ),
             )
 

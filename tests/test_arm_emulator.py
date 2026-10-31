@@ -8,6 +8,7 @@ verifier — they are an independent component.
 
 import hashlib
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -37,6 +38,19 @@ from polaris_harness.cli import main
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "arm"
+REPO_ROOT = FIXTURES_DIR.parents[2]
+STAGE2_REL_PATH = "tests/fixtures/arm/stage2_region.bin"
+
+# Pinned provenance for the v90-era capture_image_with_Bulb region. The blob
+# itself is proprietary Benro firmware and is never committed; it is extracted
+# read-only from the private research repo (see stage2_region.bin.placeholder).
+STAGE2_REGION_SHA256 = (
+    "23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3"
+)
+
+# Minimal ARM (A32) encoders for synthetic fixtures.
+ARM_MOV = lambda rd, imm: 0xE3A00000 | ((rd & 15) << 12) | (imm & 0xFF)
+BX_LR = 0xE12FFF1E
 
 
 class TestFixtureIntegrity:
@@ -84,12 +98,105 @@ class TestFixtureIntegrity:
             if "|" in line and any(kw in line.lower() for kw in ["sha", "address", "size", "mode"]):
                 assert "TBD" not in line, f"Provenance field still TBD: {line.strip()}"
 
-    def test_stage2_region_not_checked_in(self):
-        """Stage-2 region binary must NOT be checked in (private research only)."""
+    def test_stage2_region_not_tracked_by_git(self):
+        """Stage-2 region binary must never be tracked by git (proprietary).
+
+        The binary may legitimately exist locally — it is extracted read-only
+        from the private research repo and is gitignored. What must never happen
+        is it becoming a tracked artifact of this public repository.
+        """
+        import subprocess
+
         bin_path = FIXTURES_DIR / "stage2_region.bin"
-        assert not bin_path.exists(), (
-            f"Stage-2 region binary must not be committed: {bin_path}"
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", STAGE2_REL_PATH],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
         )
+        assert tracked.returncode != 0, (
+            f"Stage-2 region binary is tracked by git and must not be: {bin_path}"
+        )
+
+    def test_stage2_region_is_gitignored(self):
+        """The Stage-2 region path must be covered by .gitignore."""
+        import subprocess
+
+        res = subprocess.run(
+            ["git", "check-ignore", "-q", STAGE2_REL_PATH],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert res.returncode == 0, (
+            f"{STAGE2_REL_PATH} must be matched by .gitignore"
+        )
+
+    def test_stage2_region_local_hash_matches_provenance(self):
+        """If the region exists locally it MUST match the pinned SHA-256.
+
+        Fail closed: a locally supplied blob that does not match provenance is
+        either the wrong build or a corrupted copy, and must never be used.
+        """
+        bin_path = FIXTURES_DIR / "stage2_region.bin"
+        if not bin_path.exists():
+            pytest.skip("stage2_region.bin not supplied locally (private research)")
+        sha256 = hashlib.sha256(bin_path.read_bytes()).hexdigest()
+        assert sha256 == STAGE2_REGION_SHA256, (
+            f"local stage2_region.bin hash {sha256} does not match pinned "
+            f"provenance {STAGE2_REGION_SHA256}"
+        )
+        assert bin_path.stat().st_size == 2176
+
+    def test_stage2_region_loads_and_reports_bound_result(self):
+        """Issue #18 acceptance: load the region and report a deterministic
+        result bound to its pinned hash.
+
+        The result is bound on every field the contract carries, so a run
+        against different bytes can never be mistaken for this one.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("stage2_region")
+        if fixture is None:
+            pytest.skip("stage2_region.bin not supplied locally (private research)")
+
+        config = manager.to_emulation_config(
+            "stage2_region",
+            patcher_commit="8c015c0a73c8affea8fa723badcceb4070ef81b4",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            stub_profile="lifecycle",
+            command="capture_image_with_Bulb",
+        )
+        assert config.binary_sha256 == STAGE2_REGION_SHA256
+
+        result = ARMEmulator(config).run()
+
+        # The run is bound to the pinned artifact...
+        assert result.binary_sha256 == STAGE2_REGION_SHA256
+        assert result.patcher_commit == "8c015c0a73c8affea8fa723badcceb4070ef81b4"
+        assert result.emulator_version == "unicorn-2.1.4"
+        assert result.command == "capture_image_with_Bulb"
+
+        # ...and its outcome is deterministic and ARM-mode. The region executes
+        # real ARM instructions, then fails closed on an unmapped pointer read
+        # because no caller frame or stub wiring supplies its arguments. That
+        # failure is the expected, repeatable result for this artifact today;
+        # it must never be reported as PASS.
+        assert result.mode == "arm"
+        assert result.instructions_executed > 0, (
+            "ARM decoding produced no progress against real Stage-2 code"
+        )
+        assert result.result != EmulationResult.PASS, (
+            "unwired region must not report PASS; that would be a false "
+            "qualification signal"
+        )
+
+        # Same artifact, same config -> identical outcome.
+        second = ARMEmulator(config).run()
+        assert second.result == result.result
+        assert second.instructions_executed == result.instructions_executed
+        assert second.binary_sha256 == result.binary_sha256
 
     def test_stage2_region_placeholder_has_retrieval_guide(self):
         """Placeholder must document how to obtain the binary locally."""
@@ -103,13 +210,23 @@ class TestFixtureIntegrity:
         assert "2176" in content
         assert "NOT be committed" in content or "NOT be published" in content
 
-    def test_fixture_manager_handles_missing_stage2_region(self):
-        """FixtureManager must not crash when stage2_region.bin is absent."""
+    def test_fixture_manager_handles_stage2_region_presence(self):
+        """FixtureManager must not crash whether or not the region is supplied."""
         manager = FixtureManager(FIXTURES_DIR)
         fixture = manager.get_fixture("stage2_region")
-        assert fixture is None, (
-            "stage2_region fixture must not be discovered when binary is absent"
-        )
+        bin_path = FIXTURES_DIR / "stage2_region.bin"
+        if not bin_path.exists():
+            assert fixture is None, (
+                "stage2_region fixture must not be discovered when binary is absent"
+            )
+            return
+        # Present locally: it must be discovered and carry ARM provenance.
+        assert fixture is not None
+        assert fixture.sha256 == STAGE2_REGION_SHA256
+        if fixture.mode is not None:
+            assert fixture.mode == "arm", (
+                f"real Stage-2 region must declare arm mode, got {fixture.mode!r}"
+            )
 
     def test_fixture_manager_rejects_mismatched_sha(self):
         """FixtureManager must fail closed on SHA-256 mismatch."""
@@ -269,6 +386,159 @@ class TestUnsupportedInstruction:
         )
         assert result.exit_code == 1
         assert result.unsupported_instruction_address is not None
+
+
+class TestPinnedHashFailClosed:
+    """Issue #18: a provenance-pinned region must refuse to run on hash mismatch."""
+
+    @staticmethod
+    def _make_fixture(tmp_path, blob: bytes, recorded_sha: str):
+        """Create a fixture dir with a sidecar recording ``recorded_sha``."""
+        fixtures = tmp_path / "arm"
+        fixtures.mkdir()
+        (fixtures / "pinned_region.bin").write_bytes(blob)
+        sidecar = {
+            "description": "synthetic pinned fixture",
+            "provenance": {
+                "region_sha256": recorded_sha,
+                "mode": "arm",
+                "entry_address": "0x1000",
+                "code_address": "0x1000",
+                "code_size": 4096,
+            },
+        }
+        (fixtures / "pinned_region.json").write_text(json.dumps(sidecar))
+        return FixtureManager(fixtures)
+
+    def test_discovery_records_expected_sha(self, tmp_path):
+        """The sidecar's recorded digest is parsed into fixture metadata."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        manager = self._make_fixture(tmp_path, blob, hashlib.sha256(blob).hexdigest())
+        fixture = manager.get_fixture("pinned_region")
+        assert fixture is not None
+        assert fixture.expected_sha256 == hashlib.sha256(blob).hexdigest()
+
+    def test_matching_hash_builds_config(self, tmp_path):
+        """A pinned region whose bytes match is usable."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        manager = self._make_fixture(tmp_path, blob, hashlib.sha256(blob).hexdigest())
+        config = manager.to_emulation_config(
+            "pinned_region",
+            patcher_commit="c",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            stub_profile="default",
+            command="t",
+        )
+        assert config.binary_sha256 == hashlib.sha256(blob).hexdigest()
+
+    def test_mismatched_hash_refuses_to_run(self, tmp_path):
+        """Execution must fail closed when on-disk bytes differ from the record."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        manager = self._make_fixture(tmp_path, blob, "0" * 64)
+        with pytest.raises(ValueError, match="SHA-256 mismatch"):
+            manager.to_emulation_config(
+                "pinned_region",
+                patcher_commit="c",
+                harness_revision="0.1.0",
+                emulator_version="unicorn-2.1.4",
+                stub_profile="default",
+                command="t",
+            )
+
+    def test_tamper_after_discovery_is_caught(self, tmp_path):
+        """Replacing the blob after discovery must still be refused.
+
+        Discovery caches a digest; enforcement has to recompute at execution
+        time or a swapped-in artifact would run unnoticed.
+        """
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        manager = self._make_fixture(tmp_path, blob, hashlib.sha256(blob).hexdigest())
+        # Sanity: usable before tampering.
+        manager.to_emulation_config(
+            "pinned_region", patcher_commit="c", harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4", stub_profile="default", command="t",
+        )
+        # Swap in different bytes with the same name.
+        (tmp_path / "arm" / "pinned_region.bin").write_bytes(
+            struct.pack("<2I", ARM_MOV(1, 9), BX_LR)
+        )
+        with pytest.raises(ValueError, match="SHA-256 mismatch"):
+            manager.to_emulation_config(
+                "pinned_region", patcher_commit="c", harness_revision="0.1.0",
+                emulator_version="unicorn-2.1.4", stub_profile="default", command="t",
+            )
+
+    def test_unpinned_fixture_is_unaffected(self, tmp_path):
+        """Fixtures without a recorded digest keep working (no new gate)."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        fixtures = tmp_path / "arm"
+        fixtures.mkdir()
+        (fixtures / "unpinned.bin").write_bytes(blob)
+        manager = FixtureManager(fixtures)
+        config = manager.to_emulation_config(
+            "unpinned", patcher_commit="c", harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4", stub_profile="default", command="t",
+        )
+        assert config.binary_sha256 == hashlib.sha256(blob).hexdigest()
+
+
+class TestLayoutFailClosed:
+    """Issue #15/#18: fail closed on bad layouts, including silent-PASS ones."""
+
+    @staticmethod
+    def _cfg(tmp_path, blob: bytes, **overrides):
+        path = tmp_path / "region.bin"
+        path.write_bytes(blob)
+        kwargs = dict(
+            binary_path=path,
+            binary_sha256=hashlib.sha256(blob).hexdigest(),
+            patcher_commit="c",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="t",
+            mode="arm",
+            entry_address=0x1000,
+            code_address=0x1000,
+            code_size=0x1000,
+        )
+        kwargs.update(overrides)
+        return EmulationConfig(**kwargs)
+
+    def test_entry_beyond_blob_is_rejected(self, tmp_path):
+        """Entry past the loaded bytes would run zero-fill and report PASS."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        with pytest.raises(ValueError, match="lies beyond"):
+            ARMEmulator(self._cfg(
+                tmp_path, blob, entry_address=0x1abc, code_address=0x1000,
+            ))
+
+    def test_entry_outside_mapped_region_is_rejected(self, tmp_path):
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        with pytest.raises(ValueError, match="outside the code region"):
+            ARMEmulator(self._cfg(
+                tmp_path, blob, entry_address=0x9000, code_address=0x1000,
+            ))
+
+    def test_unaligned_code_address_is_rejected(self, tmp_path):
+        """Unicorn cannot map a non-page-aligned base; reject it up front."""
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        with pytest.raises(ValueError, match="page aligned"):
+            ARMEmulator(self._cfg(
+                tmp_path, blob, entry_address=0x1aac, code_address=0x1aac,
+            ))
+
+    def test_truncated_code_size_is_rejected(self, tmp_path):
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        with pytest.raises(ValueError, match="positive multiple"):
+            ARMEmulator(self._cfg(tmp_path, blob, code_size=0x100))
+
+    def test_valid_layout_still_runs(self, tmp_path):
+        blob = struct.pack("<2I", ARM_MOV(0, 5), BX_LR)
+        result = ARMEmulator(self._cfg(tmp_path, blob)).run()
+        assert result.result == EmulationResult.PASS
+        assert result.instructions_executed == 2
 
 
 class TestArmMode:

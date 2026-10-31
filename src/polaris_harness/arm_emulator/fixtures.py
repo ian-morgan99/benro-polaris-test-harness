@@ -49,6 +49,10 @@ class FixtureMetadata:
     code_address: Optional[int] = None
     code_size: Optional[int] = None
     max_instructions: Optional[int] = None
+    # SHA-256 recorded in the sidecar. When present, discovery verifies the
+    # bytes on disk against it and execution refuses to proceed on a mismatch
+    # (issue #18: "refuses to run it against a mismatched recorded hash").
+    expected_sha256: Optional[str] = None
     # [{"address": int, "stub_name": str, "function_name": str,
     #   "model": "call-site"|"target", "abi_shape": {...}}]
     stub_entries: List[Dict[str, Any]] = field(default_factory=list)
@@ -82,6 +86,7 @@ class FixtureManager:
             code_address = None
             code_size = None
             max_instructions = None
+            expected_sha256 = None
             stub_entries: List[Dict[str, Any]] = []
 
             if meta_file.exists():
@@ -102,6 +107,9 @@ class FixtureManager:
                     entries = prov.get("stub_entries", [])
                     if isinstance(entries, list):
                         stub_entries = [e for e in entries if isinstance(e, dict)]
+                    recorded = prov.get("region_sha256") or prov.get("sha256")
+                    if isinstance(recorded, str) and recorded.strip():
+                        expected_sha256 = recorded.strip().lower()
                 except (json.JSONDecodeError, OSError):
                     pass
 
@@ -118,6 +126,7 @@ class FixtureManager:
                 code_address=code_address,
                 code_size=code_size,
                 max_instructions=max_instructions,
+                expected_sha256=expected_sha256,
                 stub_entries=stub_entries,
             )
 
@@ -239,6 +248,21 @@ class FixtureManager:
         if fixture is None:
             raise ValueError(f"Fixture not found: {fixture_name}")
 
+        # Fail closed on a hash mismatch (issue #18). The digest recorded in the
+        # sidecar is the contract; recomputing here rather than trusting the
+        # value cached at discovery means a blob swapped or truncated after
+        # discovery still cannot be executed. This is what makes "bound every
+        # run to input binary SHA-256" true rather than cosmetic.
+        if fixture.expected_sha256:
+            actual_sha256 = self._compute_sha256(fixture.path)
+            if actual_sha256 != fixture.expected_sha256:
+                raise ValueError(
+                    f"Fixture {fixture_name} SHA-256 mismatch: recorded "
+                    f"{fixture.expected_sha256}, on-disk {actual_sha256}. "
+                    f"Refusing to run a provenance-pinned artifact whose bytes "
+                    f"do not match its recorded hash."
+                )
+
         resolved_mode = mode if mode is not None else (fixture.mode or "thumb")
         if resolved_mode not in ("arm", "thumb"):
             raise ValueError(
@@ -253,7 +277,8 @@ class FixtureManager:
         else:
             resolved_entry = 0x1000
 
-        config = EmulationConfig(            binary_path=fixture.path,
+        config = EmulationConfig(
+            binary_path=fixture.path,
             binary_sha256=fixture.sha256,
             patcher_commit=patcher_commit,
             harness_revision=harness_revision,

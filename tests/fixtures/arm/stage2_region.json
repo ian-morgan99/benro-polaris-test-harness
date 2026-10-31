@@ -1,0 +1,39 @@
+{
+  "name": "stage2_region",
+  "description": "Provenance-pinned capture_image_with_Bulb ARM code region (issue #18). The binary itself is proprietary Benro firmware, is never committed, and must be supplied locally (see stage2_region.bin.placeholder). This sidecar records only coordinates and hashes - no firmware content.",
+  "source_issue": "ian-morgan99/benro-polaris-firmware-patcher#251",
+  "provenance": {
+    "region_sha256": "23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3",
+    "symbol": "capture_image_with_Bulb",
+    "symbol_vaddr": "0x101aac",
+    "size_bytes": 2176,
+    "mode": "arm",
+    "entry_address": "0x1000",
+    "code_address": "0x1000",
+    "code_size": 4096,
+    "layout_note": "entry_address and code_address are the RELOCATED load address used by the emulator, not the original ELF symbol address. The blob is written at code_address and execution starts at entry_address, so for a 2176-byte blob entry_address must equal code_address. symbol_vaddr records the true ELF address for provenance only. ARMEmulator now rejects (fail closed) any layout where entry_address falls outside the loaded bytes: such a run executes zero-filled pages and can report PASS without ever touching the artifact. The absolute symbol address 0x101aac is not page aligned, so it cannot be used as code_address directly; use a page-aligned base such as 0x1000 or 0x101000.",
+    "max_instructions": 3000,
+    "elf_flags": "0x5000200 (Version5 EABI, soft-float ABI)",
+    "patcher_commit": "8c015c0a73c8affea8fa723badcceb4070ef81b4",
+    "harness_revision_at_pinning": "9e7afdc",
+    "emulator_version": "unicorn-2.1.4",
+    "fixture_stub_profile": "lifecycle",
+    "command": "capture_image_with_Bulb",
+    "stub_entries": [],
+    "stub_entries_note": "Deliberately empty. The region contains 42 BL/BLX sites whose targets lie outside the extracted window, so their semantic identities (camera/libgphoto/timer/callback) cannot be resolved from the region alone. Resolving them requires the source ELF's symbol table, which is not retained. Declaring addresses here without verified names would invent a boundary contract, which issue #15 forbids.",
+    "observed_behaviour": {
+      "mode": "arm",
+      "instructions_executed": 15,
+      "result": "unsupported_instruction",
+      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED)",
+      "fault_address": "0x1038",
+      "interpretation": "ARM decoding is correct: the region's real instructions execute. The run then faults reading a pointer argument that was never initialised, because no caller frame or stub wiring exists yet. Full lifecycle execution needs AAPCS argument setup plus resolved stub entries."
+    },
+    "source_retention_gap": {
+      "status": "UNRESOLVED",
+      "detail": "The pinned region does NOT match the same symbol/size extracted from the retained stock baseline pgphoto.stock (Benro 4.0.0.32), which hashes 333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19 at the same entry 0x101aac and size 2176. The pinned blob is therefore a patched build, not stock. The v90-era source binary that produced it is not retained anywhere on this host; only the extracted region survives. Until the owning build is identified and retained, this region cannot be re-derived from a firmware zip or device pull.",
+      "stock_baseline_sha256": "0308393632dd41d974bd1064e61942655131fe5392959a334cf24623d1bd4a62",
+      "stock_region_sha256": "333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19"
+    }
+  }
+}

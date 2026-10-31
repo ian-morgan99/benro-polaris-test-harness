@@ -360,9 +360,12 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
         all_passed = True
         all_skipped = True
         any_real_failure = False
+        skip_reasons = []
         for case, result in results.items():
             if result.skipped:
                 print(f"  {case.value}: SKIP - {result.skip_reason}")
+                if result.skip_reason and result.skip_reason not in skip_reasons:
+                    skip_reasons.append(result.skip_reason)
                 continue
             all_skipped = False
             status = "PASS" if result.passed else "FAIL"
@@ -378,7 +381,13 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
                     print(f"    error: {result.contract.error_message}")
 
         if all_skipped:
-            print("⚠ All ARM lifecycle cases skipped (no real Stage-2 fixture available)")
+            # Report the actual reason rather than always claiming the fixture
+            # is missing: with the region supplied locally but its call targets
+            # unresolved, "no fixture available" would be false and would send
+            # the reader to the wrong fix.
+            print("⚠ All ARM lifecycle cases skipped")
+            for reason in skip_reasons:
+                print(f"    - {reason}")
             return 0
         if all_passed:
             print("✓ All ARM lifecycle cases passed")

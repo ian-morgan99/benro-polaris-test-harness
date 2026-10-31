@@ -128,6 +128,8 @@ class ARMEmulator:
         result2 = emu2.run()
     """
 
+    PAGE_SIZE = 0x1000
+
     def __init__(self, config: EmulationConfig):
         self.config = config
         self._uc: Any = None
@@ -154,6 +156,83 @@ class ARMEmulator:
                 f"Expected 'arm' or 'thumb'."
             )
         self._mode = config.mode
+
+        # Validate the memory layout (fail closed, issue #15: "fail closed on
+        # unknown binary hashes/layouts"). Two classes of misconfiguration are
+        # rejected here because both produce a *plausible-looking* result rather
+        # than an obvious error:
+        #
+        # 1. Non-page-aligned map addresses. Unicorn's mem_map requires page
+        #    alignment, so an absolute symbol address such as 0x101aac cannot be
+        #    mapped directly and the run dies at address 0 with zero progress.
+        # 2. An entry point outside the written blob. The blob is written at
+        #    code_address; if entry_address lies beyond it, execution runs on
+        #    zero-filled pages and reports PASS having never touched the real
+        #    function. That is the worst possible outcome for a qualification
+        #    harness: a green result from an artifact that was never executed.
+        for field_name, value in (
+            ("code_address", config.code_address),
+            ("stack_address", config.stack_address),
+        ):
+            if value % self.PAGE_SIZE != 0:
+                raise ValueError(
+                    f"{field_name} {hex(value)} is not {self.PAGE_SIZE}-byte "
+                    f"page aligned; Unicorn cannot map it. Load the region at a "
+                    f"page-aligned address and set entry_address accordingly."
+                )
+        for field_name, value in (
+            ("code_size", config.code_size),
+            ("stack_size", config.stack_size),
+        ):
+            if value <= 0 or value % self.PAGE_SIZE != 0:
+                raise ValueError(
+                    f"{field_name} {hex(value)} must be a positive multiple of "
+                    f"{self.PAGE_SIZE}."
+                )
+        if not (
+            config.code_address
+            <= config.entry_address
+            < config.code_address + config.code_size
+        ):
+            raise ValueError(
+                f"entry_address {hex(config.entry_address)} is outside the code "
+                f"region [{hex(config.code_address)}, "
+                f"{hex(config.code_address + config.code_size)}). Execution would "
+                f"begin on unmapped or zero-filled memory and could report PASS "
+                f"without running the artifact."
+            )
+
+        # The mapped region may be larger than the artifact. Entry must land on
+        # real bytes, not on the zero fill between the end of the blob and the
+        # end of the mapping: Unicorn happily decodes zeros (MOV R0,R0 / UDF
+        # patterns aside) and a run that never touches the artifact can still
+        # finish cleanly and report PASS.
+        try:
+            blob_length = self._binary_length(config.binary_path)
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot read binary {config.binary_path}: {exc}"
+            ) from exc
+        if blob_length > config.code_size:
+            raise ValueError(
+                f"binary is {blob_length} bytes but code_size is "
+                f"{config.code_size}; the artifact would be truncated."
+            )
+        if not (
+            config.code_address
+            <= config.entry_address
+            < config.code_address + blob_length
+        ):
+            raise ValueError(
+                f"entry_address {hex(config.entry_address)} lies beyond the "
+                f"{blob_length}-byte artifact loaded at "
+                f"{hex(config.code_address)} (ends at "
+                f"{hex(config.code_address + blob_length)}). Execution would run "
+                f"zero-filled pages and could report PASS without ever executing "
+                f"the artifact. Set entry_address to the load address, or load "
+                f"the region at a page-aligned base derived from its symbol "
+                f"address."
+            )
 
     def register_stub(self, name: str, handler: Callable) -> None:
         """Register an ABI stub handler.
@@ -317,6 +396,24 @@ class ARMEmulator:
         """
         with open(binary_path, "rb") as f:
             return f.read()
+
+    @staticmethod
+    def _binary_length(binary_path: Path) -> int:
+        """Return the artifact size without reading its contents.
+
+        Used by construction-time layout validation so a bad layout is rejected
+        before any emulation state is created.
+
+        Args:
+            binary_path: Path to the binary file
+
+        Returns:
+            Size of the file in bytes
+
+        Raises:
+            OSError: If the file cannot be stat'd
+        """
+        return Path(binary_path).stat().st_size
 
     def _hook_code(self, uc, address: int, size: int, user_data) -> None:
         """Unicorn code execution hook - traces every instruction.

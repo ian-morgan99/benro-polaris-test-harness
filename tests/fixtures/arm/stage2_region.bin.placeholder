@@ -32,6 +32,40 @@ These fields describe our own toolchain and the extraction coordinates; they
 contain no firmware content. Re-verify them against the revisions actually used
 for a given run before treating a contract as authoritative.
 
+## Extraction coordinates (verified)
+
+For an ELF32 ARM binary whose `.text` maps `vaddr 0x15710 -> file offset 0x5710`,
+the file offset of the region is:
+
+```python
+file_offset = symbol_vaddr + text_file_offset - text_vaddr   # 0x101aac + 0x5710 - 0x15710 = 0xf1aac
+```
+
+The first three words at that offset are `0xe51b24a8`-style little-endian ARM
+words whose byte signature is `10 48 2d e9 08 b0 8d e2 d4 d0 4d e2`, i.e.
+`STMFD SP!, {...}` / `LDR R8, [SP,#imm]` / `ADD R8, SP, #imm` — the documented
+#251 prologue. Confirm this signature before trusting any extracted blob.
+
+## Source retention gap (unresolved)
+
+The pinned region is **not** the stock build. Extracting the same symbol at the
+same address and size from the retained stock baseline (`pgphoto.stock`, Benro
+4.0.0.32, SHA-256 `0308393632dd41d974bd1064e61942655131fe5392959a334cf24623d1bd4a62`)
+yields region SHA-256
+`333a3f669734459807c0dc601af6f9dad1d857a51acf546da1210bd5461f7f19`, which differs
+from the pinned value. The prologue is identical, so the function's shape is the
+same but its body was modified — the pinned blob is a **patched** build.
+
+The v90-era source binary that produced the pinned region is not retained on the
+build host: it is absent from every extracted `pgphoto.stage2ondisk` under the
+patcher and research trees, from the stock baseline, and from the unpacked
+`appfs.ubifs` images. Only the extracted region survives.
+
+Consequence: this region cannot currently be re-derived from a firmware zip or a
+device pull. Before it can be treated as a durable contract, the owning build
+must be identified and its source binary retained in the private research repo,
+with its SHA-256 recorded here.
+
 ## Retrieval procedure (private research repo only)
 
 The binary region must NOT be committed to this public repository. To obtain
