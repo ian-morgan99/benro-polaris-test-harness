@@ -1,0 +1,15 @@
+{
+  "description": "ARM Thumb fixture: SVC #0; BX LR. Triggers OS stub syscall_0 to prove stub dispatch works end-to-end.",
+  "source_issue": "ian-morgan99/benro-polaris-test-harness#15",
+  "provenance": {
+    "type": "synthetic",
+    "architecture": "ARM Thumb",
+    "instructions": [
+      {"mnemonic": "SVC #0", "encoding": "0xDF00"},
+      {"mnemonic": "BX LR", "encoding": "0x4770"}
+    ],
+    "entry_address": 4096,
+    "expected_stub_calls": [{"stub_name": "os", "function_name": "syscall_0"}],
+    "expected_exit_code": 0
+  }
+}

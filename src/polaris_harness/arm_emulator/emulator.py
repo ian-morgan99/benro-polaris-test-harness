@@ -115,6 +115,7 @@ class ARMEmulator:
         self._stub_call_records: List[StubCallRecord] = []
         self._instruction_count = 0
         self._max_instructions = config.max_instructions
+        self._instruction_limit_exceeded = False
         self._start_time_ms: Optional[int] = None
         self._unsupported_instruction_address: Optional[int] = None
         self._unexpected_syscall_number: Optional[int] = None
@@ -208,6 +209,7 @@ class ARMEmulator:
 
         # Fail closed on too many instructions (runaway execution)
         if self._instruction_count > self._max_instructions:
+            self._instruction_limit_exceeded = True
             self._logger.error("Instruction limit exceeded: %d", self._instruction_count)
             uc.emu_stop()
 
@@ -246,6 +248,34 @@ class ARMEmulator:
 
         # Fail closed on unexpected syscall
         self._logger.error("Unexpected syscall number: %d", syscall_num)
+        uc.emu_stop()
+
+    def _hook_intr(self, uc, intno, user_data) -> None:
+        """Unicorn interrupt hook - handle ARM SVC instructions.
+
+        On ARM, SVC #n triggers a software interrupt. The syscall number
+        is encoded in the immediate operand and also typically in R7.
+
+        Args:
+            uc: Unicorn engine instance
+            intno: Interrupt number
+            user_data: User data pointer
+        """
+        # On ARM, SVC syscall number is typically in R7
+        syscall_num = uc.reg_read(self._arm_const.UC_ARM_REG_R7)
+
+        # Attempt to dispatch to an OS stub if registered
+        if "os" in self._stub_registry:
+            try:
+                regs = self._read_registers()
+                self._call_stub("os", f"svc_{syscall_num}", [], regs)
+                return
+            except KeyError:
+                pass
+
+        # Fail closed on unexpected interrupt
+        self._unexpected_syscall_number = syscall_num
+        self._logger.error("Unexpected interrupt (SVC #%d)", syscall_num)
         uc.emu_stop()
 
     def _read_registers(self) -> Dict[str, int]:
@@ -297,10 +327,11 @@ class ARMEmulator:
 
     def _setup_hooks(self) -> None:
         """Install Unicorn hooks for tracing and fail-closed behavior."""
-        from unicorn import UC_HOOK_CODE, UC_HOOK_INSN_INVALID
+        from unicorn import UC_HOOK_CODE, UC_HOOK_INSN_INVALID, UC_HOOK_INTR
 
         self._uc.hook_add(UC_HOOK_CODE, self._hook_code)
         self._uc.hook_add(UC_HOOK_INSN_INVALID, self._hook_invalid_instruction)
+        self._uc.hook_add(UC_HOOK_INTR, self._hook_intr)
 
     def _initialize_unicorn(self) -> None:
         """Initialize the Unicorn engine in ARM Thumb mode."""
@@ -359,7 +390,13 @@ class ARMEmulator:
             result.stub_calls = self._stub_call_records
 
             # Determine result
-            if self._unsupported_instruction_address is not None:
+            if self._instruction_limit_exceeded:
+                result.result = EmulationResult.TIMEOUT
+                result.error_message = (
+                    f"Instruction limit exceeded: {self._instruction_count} instructions"
+                )
+                result.exit_code = 1
+            elif self._unsupported_instruction_address is not None:
                 result.result = EmulationResult.UNSUPPORTED_INSTRUCTION
                 result.error_message = (
                     f"Unsupported instruction at 0x{self._unsupported_instruction_address:08x}"
@@ -384,9 +421,22 @@ class ARMEmulator:
             result.error_message = str(e)
             result.exit_code = 3
         except Exception as e:  # pylint: disable=broad-except
-            result.result = EmulationResult.ERROR
-            result.error_message = str(e)
-            result.exit_code = 255
+            # Check if this is an Unicorn instruction error
+            from unicorn import UcError
+            if isinstance(e, UcError):
+                result.result = EmulationResult.UNSUPPORTED_INSTRUCTION
+                result.error_message = str(e)
+                # Try to capture the PC at time of error
+                try:
+                    pc = self._uc.reg_read(self._arm_const.UC_ARM_REG_PC)
+                    result.unsupported_instruction_address = pc & ~1  # Clear Thumb bit
+                except Exception:
+                    pass
+                result.exit_code = 1
+            else:
+                result.result = EmulationResult.ERROR
+                result.error_message = str(e)
+                result.exit_code = 255
         finally:
             end_time_ms = int(time.time() * 1000)
             result.duration_ms = end_time_ms - (self._start_time_ms or end_time_ms)

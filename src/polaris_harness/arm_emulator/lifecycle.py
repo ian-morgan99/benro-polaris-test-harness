@@ -450,6 +450,7 @@ class Case7CallbackOrderingRegisterPreservation(LifecycleScenario):
 
         self._callback_order: List[str] = []
         self._register_snapshots: List[Dict[str, int]] = []
+        self._register_before_after: List[Dict[str, Any]] = []
         self._widget_pointer_lifetime_ok = True
 
         def tracking_callback(function_name: str, arguments: List[Any],
@@ -457,14 +458,33 @@ class Case7CallbackOrderingRegisterPreservation(LifecycleScenario):
             self._callback_order.append(function_name)
             self._register_snapshots.append(dict(register_snapshot))
 
+            # Capture register state before callback execution
+            before = dict(register_snapshot)
+
+            # Execute the default callback stub
+            result = default_callback_stub(function_name, arguments, register_snapshot)
+
+            # Capture register state after callback execution
+            after = dict(register_snapshot)
+
+            # Record before/after for caller-saved register (R0-R3) preservation check
+            caller_saved = ["R0", "R1", "R2", "R3"]
+            before_cs = {r: before.get(r, 0) for r in caller_saved}
+            after_cs = {r: after.get(r, 0) for r in caller_saved}
+            self._register_before_after.append({
+                "function": function_name,
+                "before": before_cs,
+                "after": after_cs,
+            })
+
             # Check caller-saved registers (R0-R3) are preserved across callback
-            # In a real implementation, we'd compare before/after values
+            # In a real implementation, the callee must preserve these
             if function_name == "widget_pointer_check":
                 # Widget pointer must be valid (non-null)
                 if arguments and len(arguments) > 0 and arguments[0] == 0:
                     self._widget_pointer_lifetime_ok = False
 
-            return default_callback_stub(function_name, arguments, register_snapshot)
+            return result
 
         self.stub_registry.register("callback", tracking_callback)
 
@@ -486,6 +506,16 @@ class Case7CallbackOrderingRegisterPreservation(LifecycleScenario):
         for c in callback_calls:
             if not c["register_snapshot"]:
                 errors.append(f"Register snapshot missing for callback {c['function_name']}")
+
+        # Check caller-saved register preservation (R0-R3)
+        for entry in self._register_before_after:
+            for reg in ["R0", "R1", "R2", "R3"]:
+                if entry["before"][reg] != entry["after"][reg]:
+                    errors.append(
+                        f"Caller-saved register {reg} not preserved across "
+                        f"callback {entry['function']}: "
+                        f"before={entry['before'][reg]}, after={entry['after'][reg]}"
+                    )
 
         # Widget pointer lifetime must be preserved
         if not self._widget_pointer_lifetime_ok:

@@ -123,12 +123,20 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
+        pip install -e .[dev]
 
-    - name: Run ARM lifecycle suite
+    - name: Run ARM lifecycle suite with coverage
       run: |
         # Missing emulator support is a hard failure, not a silent skip
         polaris-harness arm-emulate --suite
+
+    - name: Run ARM emulator tests with coverage
+      run: |
+        pytest tests/test_arm_emulator.py -v --tb=short \
+          --cov=src/polaris_harness/arm_emulator \
+          --cov-report=term \
+          --cov-report=xml:coverage-arm.xml \
+          --cov-fail-under=80
 
     - name: Verify tiny fixture end-to-end
       run: |
@@ -144,6 +152,15 @@ jobs:
         assert result['instructions_executed'] > 0, 'No instructions executed'
         print(f'Tiny fixture: {result[\"instructions_executed\"]} instructions executed, result={result[\"result\"]}')
         "
+
+    - name: Upload ARM coverage results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: arm-coverage-results
+        path: |
+          coverage-arm.xml
+        retention-days: 7
 
   schema-validation:
     name: Schema Validation

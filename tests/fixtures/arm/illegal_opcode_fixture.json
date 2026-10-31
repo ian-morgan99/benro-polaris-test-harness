@@ -1,0 +1,14 @@
+{
+  "description": "ARM Thumb fixture: 0xFFFF (undefined instruction). Tests that the emulator fails closed on unsupported instructions.",
+  "source_issue": "ian-morgan99/benro-polaris-test-harness#15",
+  "provenance": {
+    "type": "synthetic",
+    "architecture": "ARM Thumb",
+    "instructions": [
+      {"mnemonic": "UNDEFINED", "encoding": "0xFFFF"}
+    ],
+    "entry_address": 4096,
+    "expected_result": "unsupported_instruction",
+    "expected_exit_code": 1
+  }
+}

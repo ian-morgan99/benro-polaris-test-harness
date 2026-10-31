@@ -66,6 +66,155 @@ class TestFixtureIntegrity:
         placeholder = FIXTURES_DIR / "stage2_region.bin.placeholder"
         assert placeholder.exists(), f"Stage-2 region placeholder not found: {placeholder}"
 
+    def test_stub_call_fixture_exists(self):
+        """Stub-call fixture binary must exist."""
+        fixture_path = FIXTURES_DIR / "stub_call_fixture.bin"
+        assert fixture_path.exists(), f"Stub-call fixture not found: {fixture_path}"
+
+    def test_stub_call_fixture_sha256(self):
+        """Stub-call fixture SHA-256 must be deterministic."""
+        fixture_path = FIXTURES_DIR / "stub_call_fixture.bin"
+        sha256 = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+        assert len(sha256) == 64
+        assert all(c in "0123456789abcdef" for c in sha256)
+
+    def test_stub_call_fixture_metadata(self):
+        """Stub-call fixture metadata must be valid JSON."""
+        meta_path = FIXTURES_DIR / "stub_call_fixture.json"
+        assert meta_path.exists(), f"Stub-call fixture metadata not found: {meta_path}"
+        with open(meta_path) as f:
+            meta = json.load(f)
+        assert "description" in meta
+        assert "provenance" in meta
+        assert "expected_stub_calls" in meta["provenance"]
+
+
+class TestStubCallFixture:
+    """Test that the stub-call fixture actually triggers stubs through the emulator."""
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+        self.fixture_path = FIXTURES_DIR / "stub_call_fixture.bin"
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def test_stub_call_fixture_triggers_os_stub(self):
+        """SVC #0 instruction should trigger the OS stub via _hook_intr."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="svc_test",
+        )
+        emulator = ARMEmulator(config)
+
+        # Track stub calls
+        stub_calls = []
+
+        def tracking_os(function_name, arguments, register_snapshot):
+            stub_calls.append((function_name, dict(arguments), dict(register_snapshot)))
+            return 0
+
+        emulator.register_stub("os", tracking_os)
+
+        result = emulator.run()
+
+        # The SVC #0 should have triggered the OS stub
+        assert len(stub_calls) == 1, f"Expected 1 OS stub call, got {len(stub_calls)}"
+        assert stub_calls[0][0] == "svc_0", f"Expected svc_0, got {stub_calls[0][0]}"
+        assert result.result == EmulationResult.PASS
+        assert result.exit_code == 0
+
+    def test_stub_call_fixture_missing_os_stub_fail_closed(self):
+        """Without an OS stub registered, SVC #0 should fail closed."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="svc_test",
+        )
+        emulator = ARMEmulator(config)
+        # Do NOT register any stubs
+
+        result = emulator.run()
+
+        # Should fail closed with MISSING_STUB or UNEXPECTED_SYSCALL
+        assert result.result in (
+            EmulationResult.MISSING_STUB,
+            EmulationResult.UNEXPECTED_SYSCALL,
+        ), f"Expected fail-closed result, got {result.result}"
+        assert result.exit_code != 0
+
+
+class TestTimeoutFailClosed:
+    """Test that the emulator fails closed on runaway execution (infinite loops)."""
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+        self.fixture_path = FIXTURES_DIR / "infinite_loop_fixture.bin"
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def test_infinite_loop_fails_closed(self):
+        """An infinite loop should be killed by the instruction limit."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="infinite_loop",
+            max_instructions=100,
+        )
+        emulator = ARMEmulator(config)
+
+        result = emulator.run()
+
+        # Should fail closed due to instruction limit exceeded
+        assert result.result in (
+            EmulationResult.ERROR,
+            EmulationResult.TIMEOUT,
+        ), f"Expected fail-closed result, got {result.result}"
+        assert result.exit_code != 0
+        # Instructions executed should be bounded (not runaway)
+        assert result.instructions_executed <= config.max_instructions + 1
+
+
+class TestUnsupportedInstruction:
+    """Test that the emulator fails closed on unsupported instructions."""
+
+    def setup_method(self):
+        self.manager = FixtureManager(FIXTURES_DIR)
+        self.fixture_path = FIXTURES_DIR / "illegal_opcode_fixture.bin"
+        self.sha256 = hashlib.sha256(self.fixture_path.read_bytes()).hexdigest()
+
+    def test_illegal_opcode_fails_closed(self):
+        """An undefined instruction should trigger UNSUPPORTED_INSTRUCTION."""
+        config = EmulationConfig(
+            binary_path=self.fixture_path,
+            binary_sha256=self.sha256,
+            patcher_commit="test-commit",
+            harness_revision="0.1.0",
+            emulator_version="unicorn-2.1.4",
+            fixture_stub_profile="default",
+            command="illegal_opcode",
+        )
+        emulator = ARMEmulator(config)
+
+        result = emulator.run()
+
+        # Should fail closed with UNSUPPORTED_INSTRUCTION
+        assert result.result == EmulationResult.UNSUPPORTED_INSTRUCTION, (
+            f"Expected UNSUPPORTED_INSTRUCTION, got {result.result}"
+        )
+        assert result.exit_code == 1
+        assert result.unsupported_instruction_address is not None
+
 
 class TestFixtureManager:
     """Test FixtureManager functionality."""
