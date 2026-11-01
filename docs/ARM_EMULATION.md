@@ -359,6 +359,57 @@ filed as **patcher issue #258**. Seeding a synthetic `sp_camera` would fabricate
 firmware state and let assertions pass against bytes that never existed, so the
 harness does not work around it.
 
+### Blockers to qualifying #251, with evidence
+
+Three gaps remain. All three were verified directly rather than inferred, and all
+three are questions for the patcher owner rather than harness work.
+
+**1. `sp_camera` is zero at entry (cases 5-9).** `.got` slot `0x2f7564` holds
+`0x3787dc`, the `sp_camera` symbol in `.bss`. It carries no dynamic relocation, so
+the file value is final and Unicorn's zero-fill matches what the process has at
+entry. The dereference yields `0xd0`. Populated by runtime camera initialisation.
+
+**2. `gp_camera_exit` needs a valid context (cases 1-3, close edge).** The close
+edge is real: disassembling the function resolves `gp_port_close` as a direct BL
+target. Pinning must start at **`0x278e0`**, not the symbol address `0x278d4`, which
+is an 8-byte hook trampoline:
+
+```armasm
+0x278d4: ldr ip, [pc]     ; ip = word at 0x278dc = 0x30000014
+0x278d8: ldr pc, [ip]     ; jumps through an address in neither PT_LOAD
+0x278e0: str r0, [fp,-0x10]  <- real prologue; pin from here
+```
+
+`0x30000014` lies outside both `PT_LOAD` segments (`0x10000..0x2df924`,
+`0x2f0488..0x37cea4`) and has no relocation, so it is written by the patch loader at
+runtime. The trampoline contributes no BL sites, which is why disassembling from
+either address yields an identical edge list.
+
+Pinning from `0x278e0` executes — `gp_log` is observed — then faults at `0x27968`:
+
+```armasm
+0x2795c: ldr r3, [fp, #-0x10]   ; r3 = camera context (caller argument)
+0x27960: ldr r3, [r3, #0x10]    ; r3 = ctx->internal  == 0 in a synthetic buffer
+0x27964: add r3, r3, #0x1000
+0x27968: ldrb r3, [r3, #0x1d4]  ; FAULT at 0x11d4
+```
+
+Reaching `gp_port_close` therefore requires a `gp_camera` context with the correct
+internal layout. That is libgphoto2's private `struct _gp_camera`, and its layout is
+version-dependent. Fabricating it risks the worst outcome available here: a wrong
+layout silently takes a different branch and produces a **green test asserting
+something false**. PARTIAL reports "unverified", which is strictly better than a
+fixture that reports "verified" wrongly.
+
+**3. The cancel mechanism is unidentified (cases 1-3, cancel edge).** All 26 callers
+of `gp_context_cancel` are `gp_filesystem_*` or folder helpers — none sits on a
+capture lifecycle path. So the cancellation #251 describes may not be implemented via
+`gp_context_cancel` in this binary at all. Pinning a caller would assert on a
+mechanism unrelated to the defect under test.
+
+The harness deliberately does not guess at any of these. Each is recorded as
+not-evaluated so the gap stays visible.
+
 Separately, disassembling `captureBulbImage` shows it contains a stop edge but no
 close or cancel edge, so cases 1-3 report PARTIAL. No function in the binary has
 both. Qualifying those edges means pinning the functions that own them (for
