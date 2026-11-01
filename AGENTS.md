@@ -26,6 +26,20 @@ Do not edit a physical scenario because a consumer implementation expects differ
 
 A harness PASS is never proof of physical camera support.
 
+### Engine-capability claims
+
+A claim that the emulation engine cannot do something (no register exposed, no instruction supported, a mode unavailable) is not evidence until tested directly.
+
+Before recording it as a terminal blocker:
+
+1. Query the engine for the specific symbol or register by name.
+2. Execute a minimal probe that would fail if the claim were true.
+3. Record the observed result, not the inference.
+
+A fault reported by the engine is not the same as a capability the engine lacks. Classify by the engine's own error code before attributing a failure to it: one catch-all classification turns memory faults into apparent instruction-decoding limits.
+
+Precedent: commit 712b996 recorded "Unicorn exposes no CPACR/SCR" as terminal without checking. `UC_ARM_REG_FPEXC` was exposed all along; setting bit 30 took execution from 71 to 275 instructions and reached `wait_and_handle_event`. Every `UcError` was being reported as `unsupported_instruction`, which is what made the claim look plausible.
+
 ## Repository boundary rule
 
 This repo owns the harness implementation and fixtures, not the underlying defects being modelled.
