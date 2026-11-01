@@ -1106,8 +1106,10 @@ class ARMEmulator:
         zeros. Anything the function reads from its parameters is therefore
         garbage, and control flow that branches on them is meaningless.
 
-        Arguments beyond R0-R3 are pushed in order so SP-4 holds the fifth
-        argument, matching AAPCS.
+        Arguments beyond R0-R3 are placed on the stack in increasing order of
+        address, with SP left pointing at the first of them: argument 5 ends up at
+        the new SP and argument 6 at SP+4. That is what AAPCS requires and what a
+        compiled callee reads.
         """
         values = list(self.config.entry_arguments)
         if not values:
@@ -1131,10 +1133,15 @@ class ARMEmulator:
                 f"{hex(sp)} would fall below the stack base "
                 f"{hex(self.config.stack_address)}. Increase stack_size."
             )
+        # Write ascending from the new SP so argument 5 lands at SP and argument 6
+        # at SP+4. Writing downward from the old SP first and then decrementing
+        # leaves them inverted, and a callee reading [SP] would receive the sixth
+        # argument as its fifth - silently changing which branch the function takes.
+        base = sp - needed
         for offset, value in enumerate(extra):
-            self._uc.mem_write(sp - (offset + 1) * 4,
+            self._uc.mem_write(base + offset * 4,
                                struct.pack("<I", value & 0xFFFFFFFF))
-        self._uc.reg_write(self._arm_const.UC_ARM_REG_SP, sp - needed)
+        self._uc.reg_write(self._arm_const.UC_ARM_REG_SP, base)
 
     def _setup_hooks(self) -> None:
         """Install Unicorn hooks for tracing and fail-closed behavior."""
