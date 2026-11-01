@@ -132,7 +132,13 @@ jobs:
 
     - name: Run ARM emulator tests with coverage
       run: |
-        pytest tests/test_arm_emulator.py -v --tb=short \
+        # test_arm_environment_seeding.py exercises fixture loading, source-binary
+        # verification and memory seeding using only synthetic inputs. Without it
+        # the measured total is 78% on a runner that cannot have the gitignored
+        # region binaries, so the gate fails for reasons unrelated to the change.
+        # With it the same commit measures 86% with no firmware present.
+        pytest tests/test_arm_emulator.py \
+               tests/test_arm_environment_seeding.py -v --tb=short \
           --cov=src/polaris_harness/arm_emulator \
           --cov-report=term \
           --cov-report=xml:coverage-arm.xml \
