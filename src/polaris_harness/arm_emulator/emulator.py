@@ -1229,12 +1229,18 @@ class ARMEmulator:
             # than whatever the previous run left in R0-R3.
             self._setup_entry_arguments()
 
-            # Start emulation
-            self._uc.emu_start(entry, self.config.entry_address + len(binary_data),
-                               timeout=self.config.timeout_ms)
+            # Start emulation. Unicorn's emu_start timeout is in MICROSECONDS,
+            # while this config field is milliseconds. Passing it raw turned the
+            # intended 5-second budget into a 5-millisecond one, silently
+            # truncating runs: measured on a 200k-instruction workload, timeout=5000
+            # elapsed 5.1ms while timeout=5000000 ran to completion in 10.4ms.
+            until = self.config.entry_address + len(binary_data)
+            self._uc.emu_start(entry, until,
+                               timeout=self.config.timeout_ms * 1000)
 
             # Read final register state
             result.final_registers = self._read_registers()
+            final_pc = result.final_registers.get("PC")
             result.stub_calls = self._stub_call_records
 
             # Determine result
@@ -1254,6 +1260,24 @@ class ARMEmulator:
                 result.result = EmulationResult.UNEXPECTED_SYSCALL
                 result.error_message = (
                     f"Unexpected syscall number: {self._unexpected_syscall_number}"
+                )
+                result.exit_code = 1
+            elif final_pc is None or (final_pc | 1) != (until | 1):
+                # Unicorn has no UC_ERR_TIMEOUT and emu_start returns normally when
+                # its timeout expires, so a run truncated by the wall-clock budget
+                # sets none of the flags above. Without this check it fell through
+                # to PASS with exit 0: a partial execution was indistinguishable
+                # from a complete one, and assertions on register values or stub
+                # calls would have been checked against a run that never finished.
+                # PC is compared with bit 0 masked because it carries the Thumb
+                # marker in Thumb mode. A missing PC means registers were never
+                # read, which cannot be a completed run either.
+                result.result = EmulationResult.TIMEOUT
+                result.error_message = (
+                    f"Run did not reach the end of the region: stopped at "
+                    f"{'<unknown>' if final_pc is None else f'0x{final_pc:08x}'}, "
+                    f"expected 0x{until:08x} after {self._instruction_count} "
+                    f"instructions (timeout_ms={self.config.timeout_ms})"
                 )
                 result.exit_code = 1
             else:

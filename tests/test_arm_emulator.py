@@ -948,9 +948,21 @@ class TestAAPCSMarshaling:
             captured_args["regs"] = dict(register_snapshot)
             return 99  # Return value should go back to R0
 
-        # Register stub first, then its entry address
+        # Register stub first, then its entry address.
         emulator.register_stub("camera", camera_stub)
-        emulator.register_stub_entry("camera", 0x2000)
+        # Intercept the BL itself, not its target. The fixture is:
+        #   0x1000 MOV R0,#42 | 0x1004 MOV R1,#100 | 0x1008 BL 0x2000 | 0x100c BX LR
+        # "call-site" means the intercepted address is the BL/BLX and execution
+        # resumes at the following instruction. Because the BL never really
+        # executes, LR keeps the value run() gave it (0x1010), so the trailing
+        # BX LR exits the region cleanly.
+        #
+        # Registering 0x2000 instead - a BL *target* - under this model resumed
+        # at 0x2004, inside the stub filler region, so control never returned to
+        # the caller. That went unnoticed because the run was truncated by the
+        # wall-clock timeout and still reported PASS; the assertions below now
+        # pin where the run ends so a truncated execution cannot pass again.
+        emulator.register_stub_entry("camera", 0x1008, model="call-site")
 
         result = emulator.run()
 
@@ -969,6 +981,18 @@ class TestAAPCSMarshaling:
         # Return value should be written back to R0
         assert result.final_registers.get("R0") == 99, (
             f"Expected R0=99 (stub return), got {result.final_registers.get('R0')}"
+        )
+
+        # The run must reach the end of the fixture rather than stopping part-way
+        # through it. Register assertions alone can be satisfied by luck: a run
+        # that wandered into stub filler still had R0=99 written back.
+        assert result.final_registers.get("PC") == 0x1010, (
+            f"Expected PC=0x1010 (end of fixture), got "
+            f"{result.final_registers.get('PC'):#x}"
+        )
+        assert result.instructions_executed == 4, (
+            f"Expected 4 instructions (MOV, MOV, intercepted BL, BX LR), got "
+            f"{result.instructions_executed}"
         )
 
 
