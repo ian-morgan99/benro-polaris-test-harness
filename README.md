@@ -54,6 +54,34 @@ It should provide:
 - Astro WebUI harness server with synthetic Astro API and browser smoke test (issue #20),
   serving synthetic static assets over loopback in dry-run mode only.
 
+## Install and build
+
+```bash
+# From a checkout (development)
+python3 -m pip install -e .
+
+# Build a wheel + sdist
+uv build --out-dir dist          # or: python3 -m build
+
+# Install the built wheel elsewhere
+python3 -m pip install dist/polaris_harness-0.1.0-py3-none-any.whl
+polaris-harness --help
+```
+
+The wheel ships `schemas/` and the Astro assets as package data under
+`polaris_harness/_data/`, so an installed harness works without a checkout.
+**ARM fixture binaries are deliberately not packaged** — they are proprietary
+Benro firmware regions, gitignored, and must be supplied explicitly:
+
+```bash
+polaris-harness arm-emulate --suite --fixtures-dir /path/to/fixtures/arm
+# or once per shell:
+export POLARIS_ARM_FIXTURES_DIR=/path/to/fixtures/arm
+```
+
+`dist/` is gitignored. Never commit a built wheel: a committed artifact can drift
+from the commit it claims to come from and then gets mistaken for a release.
+
 ## ARM Emulation (Issue #15) — Agent Usage Guide
 
 The ARM user-space emulation component lives in `src/polaris_harness/arm_emulator/` and is an **independent harness component** — it does not depend on the Polaris protocol scenario engine, runtime verifier, or transport layer.
@@ -143,7 +171,7 @@ When asking another agent to test a fix to the ARM emulation component, provide 
 |---|---|---|
 | 4 | **PASS** | runs against real `captureBulbImage` bytes with globals seeded; observes exactly one `stopCaptureImageForMessage` |
 | 1–3 | **PARTIAL** | the stop edge is verified; assertions on `close` / `cancel` / `context_cancel` cannot be evaluated — see below |
-| 5–9 | FAIL | run against `stage2_region`, which executes 71 instructions and reaches six real boundary calls before stopping at `0x101bd0` on `vmov.i32 q8,#0` — see below |
+| 5–9 | FAIL | run against `stage2_region`, which executes 275 instructions and reaches 21 real boundary calls before faulting at `0x102090` on a `sp_camera` dereference — see below |
 
 **Why cases 1–3 are PARTIAL, not PASS or FAIL.** Disassembling the 684-byte
 `captureBulbImage` region resolves all 17 BL sites, and none of them is a close,
@@ -159,18 +187,31 @@ evaluated* rather than deleted to get green. PARTIAL means nothing was contradic
 and nothing was verified — it is deliberately not a pass, and `result.passed` is
 False for it.
 
-**Why cases 5–9 cannot pass with this engine.** With `.got`/`.data` seeded from the
-retained binary, `capture_image_with_Bulb` executes 71 instructions and reaches six
-real boundary calls (`waitCameraIdle`, `numOfCaptureImage`, `setCameraStatus`,
-`gp_log`, `HI_LOG_Print`, `sqrt`) before stopping at `0x101bd0` on `vmov.i32 q8,#0`.
-Unicorn 2.1.4's ARM backend raises `UC_ERR_INSN_INVALID` for every VFP/NEON encoding
-regardless of FPU state — verified directly: both `vmov.i32` and `vstr` fault in a
-bare `Uc(UC_ARCH_ARM, UC_MODE_ARM)`, and no CPACR/SCR register is exposed to enable
-the coprocessor. No fixture configuration gets past this point, so the timer,
-callback-ordering, output-publication and manual-dispatch edges those cases assert
-are unreachable. Patching or skipping the NEON block would mutate the artifact under
-test and invalidate the run, so it is recorded as a terminal engine limit in the
-fixture's `observed_behaviour` instead.
+**Why cases 5–9 fail.** With `.got`/`.data` seeded from the retained binary and the
+VFP coprocessor enabled, `capture_image_with_Bulb` executes **275 instructions** and
+reaches **21 real boundary calls**, including `wait_and_handle_event` — the
+timer/event path cases 5–6 need. It then faults at `0x102090` on `ldr r3,[r3,#0xd0]`:
+the preceding load resolves `.got` slot `0x2f7564`, which holds `0x3787dc`, the
+`sp_camera` symbol in `.bss`. `sp_camera` is populated by runtime camera
+initialisation, so its file value is zero and the dereference yields `0xd0`.
+
+An earlier revision of this section claimed a terminal VFP/NEON engine limit at
+`0x101bd0`. That was wrong and cost a detour. Unicorn does expose `UC_ARM_REG_FPEXC`,
+and setting bit 30 makes the same instruction execute correctly:
+
+```
+FPEXC.EN cleared: executed=1 UC_ERR_INSN_INVALID, Q8 stays 0xdeadbeefdeadbeef
+FPEXC.EN set    : executed=1 no fault,             Q8 becomes 0x0
+```
+
+A real ARM Linux process has the FPU enabled at entry because the kernel enables it,
+so this was uninitialised harness CPU state, not an engine limit. `EmulationConfig.enable_fpu`
+(default `True`) sets it while establishing entry state.
+
+The remaining gap is runtime state the artifact needs, which the patcher repo owns per
+`docs/OWNERSHIP-AND-ISOLATION.md`; it is filed as **patcher issue #258**. Seeding a
+synthetic `sp_camera` would fabricate firmware state and let assertions pass against
+bytes that never existed, so the harness does not work around it.
 
 **Prerequisite:** cases 1–4 need `POLARIS_FIRMWARE_ROOT` pointing at the directory
 containing the retained `pgphoto.stage2ondisk`. Without it they SKIP — an unmet
@@ -182,12 +223,13 @@ export POLARIS_FIRMWARE_ROOT=/path/to/extracted_appfs/stage2-ondisk/ondisk
 
 `stage2_region` needs the same variable to apply its `.got`/`.data` memory patches.
 Without it the globals stay zero-filled and the run faults at `0x101b38` instead of
-`0x101bd0`, which is a measurement of a different environment, so the two
+`0x102090`, which is a measurement of a different environment, so the two
 integrity tests that compare against recorded behaviour skip rather than compare
 mismatched runs.
 
-With it set, `python -m pytest tests/` reports 298 passed; without it, 294 passed
-and 4 skipped. Both are green.
+`python -m pytest tests/` is green either way; the only difference is how many
+fixture-integrity tests can run. Setting the root converts those skips into real
+assertions, so a passing-with-root run covers strictly more than a passing-without.
 
 **Exit codes for `arm-emulate --suite`:**
 

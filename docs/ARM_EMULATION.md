@@ -334,14 +334,30 @@ known outstanding defects include:
 - Cancellation-result loss in the shared stop callback
 - Deferred `bulb=0` cancel path initiating a new capture
 
-**The harness cannot currently qualify #251, and that is an engine limit rather
-than a fixture gap.** With `.got`/`.data` seeded from the retained binary,
-`capture_image_with_Bulb` executes 71 instructions and reaches six real boundary
-calls before stopping at `0x101bd0` on `vmov.i32 q8,#0`. Unicorn 2.1.4's ARM
-backend raises `UC_ERR_INSN_INVALID` for every VFP/NEON encoding regardless of FPU
-state, and exposes no CPACR/SCR register to enable the coprocessor. Cases 5-9
-assert timer cancellation/expiry, callback ordering, output publication and manual
-dispatch - none of which are reachable past that instruction.
+**The harness cannot currently qualify #251, and the blocker is runtime state
+the artifact needs rather than an engine limit.** An earlier revision of this
+document recorded `UC_ERR_INSN_INVALID` at `0x101bd0` as a terminal VFP/NEON
+engine limit. That was wrong: Unicorn exposes `UC_ARM_REG_FPEXC`, and setting bit
+30 (`FPEXC.EN`) makes the same instruction execute with correct semantics —
+`vmov.i32 q8,#0` zeroes Q8 instead of faulting. A real ARM Linux process has the
+FPU enabled at entry because the kernel enables it, so this was uninitialised
+harness CPU state. `EmulationConfig.enable_fpu` (default True) sets it while
+establishing entry state.
+
+With the FPU enabled and `.got`/`.data` seeded from the retained binary,
+`capture_image_with_Bulb` executes **275 instructions** and reaches **21 real
+boundary calls**, including `wait_and_handle_event` — the timer/event path cases
+5-6 need. It then faults at `0x102090` on `ldr r3,[r3,#0xd0]`: the preceding load
+resolves `.got` slot `0x2f7564`, which holds `0x3787dc`, the `sp_camera` symbol in
+`.bss`. `sp_camera` is populated by runtime camera initialisation, so its file
+value is zero and the dereference yields `0xd0`. Cases 5-9 assert timer
+cancellation/expiry, callback ordering, output publication and manual dispatch,
+none of which are reachable until that structure exists.
+
+That gap is owned by the patcher repo per `OWNERSHIP-AND-ISOLATION.md` and is
+filed as **patcher issue #258**. Seeding a synthetic `sp_camera` would fabricate
+firmware state and let assertions pass against bytes that never existed, so the
+harness does not work around it.
 
 Separately, disassembling `captureBulbImage` shows it contains a stop edge but no
 close or cancel edge, so cases 1-3 report PARTIAL. No function in the binary has
