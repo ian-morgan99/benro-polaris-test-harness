@@ -169,3 +169,46 @@ class TestFaultClassification:
 
         assert result.unsupported_instruction_address is not None
         assert result.error_message
+
+    def test_memory_fault_records_accessed_address(self, tmp_path):
+        """A memory fault must name the address it was looking for.
+
+        Reporting only the PC leaves "Invalid memory read" unidentifiable: the
+        reader has to re-run under a hook to learn which structure was missing.
+        ldr r1,[r1] with r1 == 0 must record the accessed address as 0.
+        """
+        code = LDR_R1_FROM_R1 + UDF
+        result = ARMEmulator(_config(tmp_path, code)).run()
+
+        assert result.fault_access_address == 0, (
+            f"expected the dereferenced address, got "
+            f"{result.fault_access_address!r}"
+        )
+
+    def test_memory_fault_records_readable_access_type(self, tmp_path):
+        """The access reason must be a readable label, not a raw enum value.
+
+        Unicorn passes the specific reason (UC_MEM_READ_UNMAPPED) rather than the
+        generic UC_MEM_READ, so an unmapped read should say so.
+        """
+        code = LDR_R1_FROM_R1 + UDF
+        result = ARMEmulator(_config(tmp_path, code)).run()
+
+        assert result.fault_access_type == "read_unmapped", (
+            f"expected a readable reason, got {result.fault_access_type!r}"
+        )
+        assert f"0x{result.fault_access_address:08x}" in result.error_message, (
+            "the error message should name the missing address without a hook"
+        )
+
+    def test_passing_run_records_no_fault(self, tmp_path):
+        """A clean run must not report fault fields.
+
+        Without this, a stale value from a previous run could be read as a real
+        gap on a passing result.
+        """
+        result = ARMEmulator(_config(tmp_path, VMOV_I32_Q8_0)).run()
+
+        assert result.result == EmulationResult.PASS
+        assert result.fault_access_address is None
+        assert result.fault_access_type is None

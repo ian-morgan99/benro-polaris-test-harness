@@ -232,6 +232,13 @@ class EmulationResultRecord:
     final_registers: Dict[str, int] = field(default_factory=dict)
     error_message: Optional[str] = None
     unsupported_instruction_address: Optional[int] = None
+    # Address the faulting instruction tried to access, and how. Distinct from
+    # unsupported_instruction_address, which is the PC. For a memory fault the PC
+    # says which instruction failed while this says what it was looking for -
+    # without it "Invalid memory read" gives no way to identify the missing
+    # structure without re-running under a hook.
+    fault_access_address: Optional[int] = None
+    fault_access_type: Optional[str] = None
     unexpected_syscall_number: Optional[int] = None
     # Register snapshots taken at config.watch_addresses, in execution order.
     watch_captures: List[Dict[str, Any]] = field(default_factory=list)
@@ -281,6 +288,8 @@ class ARMEmulator:
         self._instruction_limit_exceeded = False
         self._start_time_ms: Optional[int] = None
         self._unsupported_instruction_address: Optional[int] = None
+        self._fault_access_address: Optional[int] = None
+        self._fault_access_type: Optional[str] = None
         self._unexpected_syscall_number: Optional[int] = None
         # Register snapshots taken at config.watch_addresses, in execution order.
         self._watch_captures: List[Dict[str, Any]] = []
@@ -722,6 +731,47 @@ class ARMEmulator:
         self._logger.debug("AAPCS stub call: %s.%s(%s) -> %s",
                            stub_name, function_name, arguments, return_value)
 
+    def _hook_mem_invalid(self, uc, access, address: int, size: int,
+                          value: int, user_data) -> bool:
+        """Record what a faulting memory access was looking for.
+
+        A memory fault currently reports only the PC, so "Invalid memory read"
+        does not say which structure was missing. Identifying it required re-running
+        under a hook by hand; capturing the address here lets the result name the
+        gap directly.
+
+        Returns:
+            Always False, so Unicorn fails the access and run() raises. This hook
+            must not resume execution: silently continuing would let a run proceed
+            past state it never had and report success against an incomplete
+            environment.
+
+        Args:
+            uc: Unicorn engine instance
+            access: UC_MEM_* constant describing the access
+            address: Address the instruction tried to access
+            size: Access size in bytes
+            value: Value written (writes) or 0 (reads)
+            user_data: User data pointer
+        """
+        import unicorn as _unicorn
+
+        # The hook receives the specific reason (UC_MEM_READ_UNMAPPED), not the
+        # generic UC_MEM_READ, so label from the full set. Built from the module so
+        # it cannot drift if Unicorn renumbers these.
+        reasons = {
+            v: name[len("UC_MEM_"):].lower()
+            for name, v in vars(_unicorn).items()
+            if name.startswith("UC_MEM_") and isinstance(v, int)
+        }
+        self._fault_access_address = address
+        self._fault_access_type = reasons.get(access, f"access({access})")
+        self._logger.error(
+            "Faulting memory %s at 0x%08x (size %d)",
+            self._fault_access_type, address, size,
+        )
+        return False
+
     def _hook_invalid_instruction(self, uc, address: int, size: int, user_data) -> None:
         """Unicorn invalid instruction hook - fail closed on unsupported instructions.
 
@@ -1088,11 +1138,16 @@ class ARMEmulator:
 
     def _setup_hooks(self) -> None:
         """Install Unicorn hooks for tracing and fail-closed behavior."""
-        from unicorn import UC_HOOK_CODE, UC_HOOK_INSN_INVALID, UC_HOOK_INTR
+        from unicorn import (
+            UC_HOOK_CODE, UC_HOOK_INSN_INVALID, UC_HOOK_INTR, UC_HOOK_MEM_INVALID,
+        )
 
         self._uc.hook_add(UC_HOOK_CODE, self._hook_code)
         self._uc.hook_add(UC_HOOK_INSN_INVALID, self._hook_invalid_instruction)
         self._uc.hook_add(UC_HOOK_INTR, self._hook_intr)
+        # Records what a faulting access was looking for. Returns False, so the
+        # access still fails and run() raises as before - this only observes.
+        self._uc.hook_add(UC_HOOK_MEM_INVALID, self._hook_mem_invalid)
 
         # Per-address register captures, installed only when requested.
         if self.config.watch_addresses:
@@ -1227,9 +1282,19 @@ class ARMEmulator:
                 } - {None}
                 if errno in memory_errnos:
                     result.result = EmulationResult.MEMORY_FAULT
+                    result.fault_access_address = self._fault_access_address
+                    result.fault_access_type = self._fault_access_type
                 else:
                     result.result = EmulationResult.UNSUPPORTED_INSTRUCTION
                 result.error_message = str(e)
+                if result.result == EmulationResult.MEMORY_FAULT \
+                        and result.fault_access_address is not None:
+                    # Name the missing address: "Invalid memory read" alone gives
+                    # no way to identify which structure was absent.
+                    result.error_message += (
+                        f" [faulting {result.fault_access_type} of "
+                        f"0x{result.fault_access_address:08x}]"
+                    )
                 # Try to capture the PC at time of error
                 try:
                     pc = self._uc.reg_read(self._arm_const.UC_ARM_REG_PC)
