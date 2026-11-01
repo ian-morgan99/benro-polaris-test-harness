@@ -19,6 +19,36 @@ from .version import (
     SCENARIO_SCHEMA_VERSION,
 )
 
+# Schemas ship inside the wheel at polaris_harness/_data/schemas (see
+# pyproject force-include). A site-packages install has no repository root, so
+# the packaged copy is preferred and the repo layout is only a development
+# fallback. Resolving against the repo alone makes an installed wheel raise
+# FileNotFoundError on first use.
+_PACKAGED_DATA = Path(__file__).parent / "_data"
+
+
+def _schemas_dir() -> Path:
+    """Locate the schema directory for this installation.
+
+    Returns:
+        Packaged schema directory, or the repository one in a source checkout
+
+    Raises:
+        FileNotFoundError: If neither exists, rather than validating against an
+            empty set of schemas and reporting success.
+    """
+    packaged = _PACKAGED_DATA / "schemas"
+    if packaged.is_dir():
+        return packaged
+    repo = Path(__file__).parent.parent.parent / "schemas"
+    if repo.is_dir():
+        return repo
+    raise FileNotFoundError(
+        "No schema directory found. Expected packaged data at "
+        f"{packaged} or a source checkout at {repo}. An installed wheel must "
+        "ship polaris_harness/_data/schemas."
+    )
+
 
 class ValidationError(Exception):
     """Raised when validation fails."""
@@ -37,7 +67,7 @@ class SchemaValidator:
 
     def _load_schemas(self):
         """Load all schemas from the schemas directory."""
-        schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+        schemas_dir = _schemas_dir()
 
         # Scenario schema
         scenario_schema_path = schemas_dir / "scenario.schema.json"

@@ -22,25 +22,68 @@ from .scenarios import ASTRO_SCENARIOS, get_scenario, validate_scenario_result
 from .compatibility import generate_compatibility_report
 
 
-# Asset directory
-ASTRO_ASSETS_DIR = Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "astro"
+# Asset directory. Ships inside the wheel at polaris_harness/_data/astro_assets
+# (see pyproject force-include); the repository layout is only a development
+# fallback, because a site-packages install has no tests/ directory.
+_PACKAGED_ASSETS = Path(__file__).parent.parent / "_data" / "astro_assets"
+_REPO_ASSETS = Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "astro"
 
-# Asset provenance manifest
-MANIFEST_PATH = ASTRO_ASSETS_DIR / "astro_assets.json"
 
-# Load asset manifest
-with open(MANIFEST_PATH) as f:
-    ASSET_MANIFEST = json.load(f)
+def assets_dir() -> Path:
+    """Locate the Astro asset directory for this installation.
 
-# Compute asset hashes at load time
-ASSET_HASHES: Dict[str, Optional[str]] = {}
-for name, info in ASSET_MANIFEST.get("assets", {}).items():
-    asset_path = ASTRO_ASSETS_DIR / name
-    if asset_path.exists():
-        sha256 = hashlib.sha256(asset_path.read_bytes())  # type: ignore[arg-type]
-        ASSET_HASHES[name] = sha256.hexdigest()
-    else:
-        ASSET_HASHES[name] = None  # type: ignore[assignment]
+    Returns:
+        Packaged asset directory, or the repository one in a source checkout
+
+    Raises:
+        FileNotFoundError: If neither exists. Previously this module opened the
+            manifest at import time, so `import polaris_harness` - and therefore
+            `polaris-harness --help` - died on an installed wheel even when the
+            caller wanted nothing to do with the Astro server.
+    """
+    if _PACKAGED_ASSETS.is_dir():
+        return _PACKAGED_ASSETS
+    if _REPO_ASSETS.is_dir():
+        return _REPO_ASSETS
+    raise FileNotFoundError(
+        "No Astro asset directory found. Expected packaged data at "
+        f"{_PACKAGED_ASSETS} or a source checkout at {_REPO_ASSETS}."
+    )
+
+
+def load_asset_manifest() -> Dict[str, Any]:
+    """Read the asset provenance manifest.
+
+    Returns:
+        Parsed manifest
+
+    Raises:
+        FileNotFoundError: If the manifest is absent, rather than serving an
+            empty asset set that would silently pass hash verification.
+    """
+    path = assets_dir() / "astro_assets.json"
+    with open(path) as f:
+        return json.load(f)
+
+
+def compute_asset_hashes(manifest: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """Hash every asset named in the manifest.
+
+    Args:
+        manifest: Parsed asset provenance manifest
+
+    Returns:
+        Asset name to SHA-256, or None where the file is missing
+    """
+    base = assets_dir()
+    hashes: Dict[str, Optional[str]] = {}
+    for name in manifest.get("assets", {}):
+        asset_path = base / name
+        if asset_path.exists():
+            hashes[name] = hashlib.sha256(asset_path.read_bytes()).hexdigest()
+        else:
+            hashes[name] = None
+    return hashes
 
 
 def create_app() -> Flask:
@@ -49,7 +92,11 @@ def create_app() -> Flask:
     Returns:
         Configured Flask app instance
     """
-    app = Flask(__name__, static_folder=str(ASTRO_ASSETS_DIR))
+    asset_dir = assets_dir()
+    manifest = load_asset_manifest()
+    asset_hashes = compute_asset_hashes(manifest)
+
+    app = Flask(__name__, static_folder=str(asset_dir))
 
     # In-memory state for synthetic sessions (stored on app.config to avoid
     # Flask attribute restrictions)
@@ -72,16 +119,16 @@ def create_app() -> Flask:
     @app.route("/")
     def index():
         """Serve the Astro WebUI SPA."""
-        return send_from_directory(ASTRO_ASSETS_DIR, "index.html")
+        return send_from_directory(asset_dir, "index.html")
 
     @app.route("/<path:filename>")
     def static_assets(filename):
         """Serve static assets (JS, CSS, etc.) with hash verification."""
-        if filename not in ASSET_MANIFEST.get("assets", {}):
+        if filename not in manifest.get("assets", {}):
             return jsonify({"error": f"Unknown asset: {filename}"}), 404
 
-        expected_hash = ASSET_MANIFEST["assets"][filename]["sha256"]
-        actual_hash = ASSET_HASHES.get(filename)
+        expected_hash = manifest["assets"][filename]["sha256"]
+        actual_hash = asset_hashes.get(filename)
 
         if actual_hash != expected_hash:
             return jsonify({
@@ -90,12 +137,12 @@ def create_app() -> Flask:
                 "actual": actual_hash,
             }), 500
 
-        return send_from_directory(ASTRO_ASSETS_DIR, filename)
+        return send_from_directory(asset_dir, filename)
 
     @app.route("/api/astro/manifest")
     def asset_manifest():
         """Return the asset provenance manifest."""
-        return jsonify(ASSET_MANIFEST)
+        return jsonify(manifest)
 
     # ------------------------------------------------------------------
     # Synthetic Astro API routes
@@ -306,8 +353,9 @@ def run_server(host: str = "127.0.0.1", port: int = 0, profile: str = "synthetic
     app = create_app()
     print(f"Starting Astro WebUI server on {host}:{port}")
     print(f"Profile: {profile}")
-    print(f"Assets: {ASTRO_ASSETS_DIR}")
-    print(f"Asset hashes verified: {all(h is not None for h in ASSET_HASHES.values())}")
+    print(f"Assets: {assets_dir()}")
+    print(f"Asset hashes verified: "
+          f"{all(h is not None for h in compute_asset_hashes(load_asset_manifest()).values())}")
 
     app.run(host=host, port=port, debug=False)
     return 0

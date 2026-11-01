@@ -343,9 +343,22 @@ def arm_emulate_command(args: argparse.Namespace) -> int:
     Polaris protocol scenario engine or runtime verifier.
     """
     fixtures_dir = Path(args.fixtures_dir) if args.fixtures_dir else None
-    fixture_manager = FixtureManager(fixtures_dir) if fixtures_dir else FixtureManager(
-        Path(__file__).parent.parent.parent / "tests" / "fixtures" / "arm"
-    )
+    if fixtures_dir is None:
+        # ARM fixture binaries are private research artifacts and are not
+        # packaged into the wheel, so an installed harness needs one of these
+        # two ways to find them. The repository default only applies to a
+        # source checkout.
+        env_dir = os.environ.get("POLARIS_ARM_FIXTURES_DIR")
+        if env_dir:
+            fixtures_dir = Path(env_dir)
+        else:
+            repo_default = (
+                Path(__file__).parent.parent.parent / "tests" / "fixtures" / "arm"
+            )
+            fixtures_dir = repo_default if repo_default.is_dir() else (
+                Path(__file__).parent / "_data" / "arm_fixtures"
+            )
+    fixture_manager = FixtureManager(fixtures_dir)
 
     if args.suite:
         # Run all 9 lifecycle cases

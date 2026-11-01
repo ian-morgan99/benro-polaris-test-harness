@@ -45,6 +45,19 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/polaris_harness"]
 
+# Runtime data the package reads at first use. Both consumers resolve it
+# relative to the repository root, which does not exist in a site-packages
+# install: validation.py opens schemas/*.schema.json and astro_webui opens
+# tests/fixtures/astro/astro_assets.json. Without these the built wheel
+# installs cleanly and then dies on `polaris-harness --help`.
+#
+# ARM fixture binaries are deliberately NOT included - they are private
+# research artifacts, gitignored, and reach the harness via
+# --fixtures-dir or POLARIS_ARM_FIXTURES_DIR.
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "polaris_harness/_data/schemas"
+"tests/fixtures/astro" = "polaris_harness/_data/astro_assets"
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"

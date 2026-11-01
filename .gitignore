@@ -5,6 +5,16 @@ __pycache__/
 .pytest_cache/
 uploads/
 
+# Build output. Reproducible from `uv build`; never commit a wheel or sdist,
+# because a committed artifact can drift from the commit it claims to be built
+# from and then gets mistaken for a release.
+dist/
+build/
+
+# Editor-local task definitions. Generated per-machine and easy to duplicate;
+# the canonical build/test commands live in README.md and .github/workflows/ci.yml.
+.vscode/
+
 # Proprietary Benro firmware regions — extracted locally from
 # pgphoto.stage2ondisk in the private research repo. Never commit to GitHub.
 # Each has a committed .json sidecar (coordinates + hashes only) and a
