@@ -1,0 +1,98 @@
+name: "Pin a region / add lifecycle coverage (patcher -> harness)"
+about: >
+  Ask the harness to pin a newly constructed Stage-2 region or add executable
+  coverage for a firmware contract. Use when you have built or changed an
+  artifact and want it validated.
+title: "[pin] "
+labels: ["enhancement", "cross-repo"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The harness owns executable representations of **evidenced** contracts,
+        trace replay, deterministic servers, fault injection and validation
+        fixtures. It does not own the underlying defect
+        (`docs/OWNERSHIP-AND-ISOLATION.md`).
+
+        Region binaries are gitignored private research artifacts, so they cannot
+        be attached here. Provide content hashes and the retained path; the
+        harness verifies the source binary against `source_binary_sha256` before
+        use and records no absolute host path in the sidecar.
+  - type: textarea
+    id: artifact
+    attributes:
+      label: Artifact provenance (mandatory)
+      value: |
+        ```
+        region_sha256:
+        source_binary_sha256:
+        patcher_ref:
+        source_binary_retained_at:
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: region
+    attributes:
+      label: Region to pin
+      description: >
+        Symbol, entry vaddr and size. The harness loads at the original vaddr
+        because ARM code resolves globals with `ldr rN,[pc,#imm]` + `add rN,pc,rN`,
+        whose literal pool words are PC-relative deltas.
+      value: |
+        ```
+        symbol:
+        entry_address:
+        code_address:
+        code_size:
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: edges
+    attributes:
+      label: Boundary call sites in the region
+      description: >
+        BL targets with resolved names. The harness intercepts at the BL site
+        because callee bodies usually fall outside the extracted window. If you
+        do not know these, say so and the harness will resolve them from the
+        retained ELF via .symtab and .rel.plt.
+    validations:
+      required: false
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract to assert
+      description: >
+        The behaviour that must hold, citing the originating issue. Assertions
+        encode the spec; they are kept even when an artifact cannot exercise them,
+        and reported as not-evaluated rather than deleted to get green.
+      value: |
+        ```
+        source_issue: ian-morgan99/benro-polaris-firmware-patcher#NNN
+        must_hold:
+        must_not_happen:
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: runtime-state
+    attributes:
+      label: Runtime state the region needs
+      description: >
+        Globals or structures populated at runtime rather than present in the
+        file. Without this the run faults on a pointer chase and the gap is
+        misread as missing behaviour. Example: `sp_camera` in .bss is populated by
+        camera initialisation, so its file value is zero.
+    validations:
+      required: false
+  - type: textarea
+    id: prior-measurement
+    attributes:
+      label: Known measurement, if any
+      description: >
+        Instructions executed, boundary calls reached, fault address and Unicorn
+        error code. Note that memory faults report `result=memory_fault` and only
+        genuinely undecodable opcodes report `unsupported_instruction`.
+    validations:
+      required: false
