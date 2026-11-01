@@ -1,5 +1,5 @@
 name: "Pin a region / add lifecycle coverage (patcher -> harness)"
-about: >
+description: >
   Ask the harness to pin a newly constructed Stage-2 region or add executable
   coverage for a firmware contract. Use when you have built or changed an
   artifact and want it validated.
