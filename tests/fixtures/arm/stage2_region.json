@@ -318,21 +318,24 @@
     "stub_entries_note": "All 42 BL sites resolved from the retained source ELF: 10 via .symtab FUNC entries and 3 via .rel.plt -> .dynsym (sqrt, textdomain, isatty). model is call-site because the intercepted address is the BL instruction inside the mapped blob; the callee bodies are outside the extracted window. Stub grouping is semantic: camera state/capture calls to 'camera', gp_log to 'libgphoto', HI_LOG_Print/sqrt/textdomain/isatty to 'os', timediff_now/delayTime to 'timer', cb_arg_run to 'callback'.",
     "observed_behaviour": {
       "mode": "arm",
-      "instructions_executed": 71,
-      "result": "unsupported_instruction",
-      "error": "Invalid instruction (UC_ERR_INSN_INVALID)",
-      "fault_address": "0x101bd0",
-      "stub_calls_recorded": 6,
+      "instructions_executed": 275,
+      "result": "memory_fault",
+      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED)",
+      "fault_address": "0x102090",
+      "stub_calls_recorded": 21,
       "stub_calls_seen": {
         "waitCameraIdle": 1,
         "numOfCaptureImage": 1,
         "setCameraStatus": 1,
-        "gp_log": 1,
-        "HI_LOG_Print": 1,
-        "sqrt": 1
+        "gp_log": 5,
+        "HI_LOG_Print": 5,
+        "sqrt": 3,
+        "textdomain": 2,
+        "cb_arg_run": 2,
+        "wait_and_handle_event": 1
       },
-      "interpretation": "Measured with the committed sidecar config: load_address 0x101aac, code region [0x101000, 0x37d000), .got and .data restored from the retained source binary by memory_patches, all 42 call sites registered, default stub profile. Seeding the globals removed the previous UC_ERR_WRITE_UNMAPPED at 0x101b38 - that store `str r2,[r3,#0xbc0]` dereferences .got+0x628, which holds 0x3787f8 (a .bss address with no dynamic relocation), so zero-filling made the target 0xbc0. Execution now reaches six real boundary calls and stops at 0x101bd0 on `vmov.i32 q8,#0`. That is a hard emulator limit, not an environment gap: Unicorn 2.1.4's ARM backend raises UC_ERR_INSN_INVALID for every VFP/NEON encoding regardless of FPU state (verified directly - `vmov.i32` and `vstr` both fault in a bare Uc(UC_ARCH_ARM, UC_MODE_ARM) instance, and no CPACR/SCR register is exposed to enable the coprocessor). No configuration of this engine can execute past 0x101bd0.",
-      "superseded": "Two earlier measurements are superseded. (1) 5001 instructions / timeout / first_stub setCameraStatus was measured with an ad-hoc config using a subset of stub entries and a larger mapping, not the committed sidecar. (2) 33 instructions / UC_ERR_WRITE_UNMAPPED at 0x101b38 with 2 stub calls was measured before .got/.data were seeded; it is reproduced exactly when POLARIS_FIRMWARE_ROOT is unset and the patches cannot be applied."
+      "interpretation": "Measured with the committed sidecar config and enable_fpu=True. Enabling the VFP coprocessor (FPEXC.EN) removed the earlier UC_ERR_INSN_INVALID at 0x101bd0 on `vmov.i32 q8,#0`, extending the run from 71 to 275 instructions and from 6 to 21 boundary calls, and reaching wait_and_handle_event - the timer/event path cases 5-6 need. The run now faults at 0x102090 on `ldr r3,[r3,#0xd0]`: the preceding `ldr r3,[r4,r3]` resolves a .got slot (0x2f7564) holding 0x3787dc, the sp_camera symbol in .bss. sp_camera is populated at runtime by camera initialisation, so its file value is zero and the dereference yields 0. That is a runtime-state gap, not a decoding failure: the instruction decodes fine and the memory it addresses was never provided.",
+      "superseded": "Two earlier measurements are superseded. (1) 33 instructions / UC_ERR_WRITE_UNMAPPED at 0x101b38: measured before .got/.data were seeded, and reproduced exactly when POLARIS_FIRMWARE_ROOT is unset. (2) 71 instructions / UC_ERR_INSN_INVALID at 0x101bd0: recorded as a terminal VFP engine limit, but that was a misdiagnosis. Unicorn exposes UC_ARM_REG_FPEXC and setting bit 30 makes the same vmov execute with correct semantics (Q8 becomes 0). The fault was uninitialised CPU state in the harness, not an engine limit. It was also reported as result=unsupported_instruction because every UcError was classified that way; memory faults now report result=memory_fault."
     },
     "source_retention_gap": {
       "status": "RESOLVED",

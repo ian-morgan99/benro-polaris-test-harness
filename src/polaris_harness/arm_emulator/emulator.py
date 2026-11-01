@@ -50,6 +50,13 @@ class EmulationResult(Enum):
     ERROR = "error"
     TIMEOUT = "timeout"
     UNSUPPORTED_INSTRUCTION = "unsupported_instruction"
+    # A load/store/fetch faulted on unmapped or protected memory. Distinct from
+    # UNSUPPORTED_INSTRUCTION: that means the engine could not decode an
+    # instruction, whereas this means the instruction is fine but the memory it
+    # touches was not provided. Conflating them makes an environment gap look
+    # like a decoding failure - which is exactly how an uninitialised FPU came to
+    # be recorded as a "hard engine limit".
+    MEMORY_FAULT = "memory_fault"
     UNEXPECTED_SYSCALL = "unexpected_syscall"
     MISSING_STUB = "missing_stub"
 
@@ -182,6 +189,18 @@ class EmulationConfig:
     timeout_ms: int = 5000
     max_instructions: int = 100000
     mode: str = "thumb"
+    # Enable the VFP coprocessor by setting FPEXC.EN before execution.
+    #
+    # True because that is what a real ARM Linux process has at entry: the
+    # kernel enables the FPU, so firmware compiled for ARMv7 with VFP runs with
+    # it enabled. Unicorn leaves FPEXC.EN cleared, which makes it reject every
+    # VFP encoding with UC_ERR_INSN_INVALID - that reads as an engine limit but
+    # is really an uninitialised-CPU-state bug in the harness. Verified: with EN
+    # cleared, `vmov.i32 q8,#0` faults and Q8 keeps its pre-seeded value; with EN
+    # set it executes and Q8 becomes 0x0, i.e. correct semantics.
+    #
+    # Set False only to reproduce what a coprocessor-disabled CPU would do.
+    enable_fpu: bool = True
 
 
 @dataclass
@@ -998,6 +1017,37 @@ class ARMEmulator:
                 )
             self._uc.mem_write(region.address + region.dest_offset, payload)
 
+    def _enable_fpu(self) -> None:
+        """Set FPEXC.EN so the emulator accepts VFP/NEON encodings.
+
+        Unicorn's ARM backend rejects every VFP instruction with
+        UC_ERR_INSN_INVALID while FPEXC.EN is cleared, and it exposes no CPACR or
+        SCR to enable the coprocessor the usual way. FPEXC itself is exposed and
+        writing bit 30 is sufficient: `vmov.i32 q8,#0` then executes and writes
+        Q8 = 0 instead of faulting.
+
+        This establishes the state a real ARM Linux process has at entry rather
+        than altering the artifact, so it does not count as patching the firmware
+        under test.
+
+        Raises:
+            ValueError: if FPEXC cannot be written, since silently continuing
+                would reproduce the earlier misdiagnosis of an engine limit.
+        """
+        fpu_en = 1 << 30
+        try:
+            self._uc.reg_write(self._arm_const.UC_ARM_REG_FPEXC, fpu_en)
+            got = self._uc.reg_read(self._arm_const.UC_ARM_REG_FPEXC)
+        except Exception as exc:  # noqa: BLE001 - re-raised with context
+            raise ValueError(
+                f"could not enable the VFP coprocessor (FPEXC.EN): {exc}"
+            ) from exc
+        if not (got & fpu_en):
+            raise ValueError(
+                f"FPEXC.EN did not stick: wrote {fpu_en:#x}, read back {got:#x}"
+            )
+        logger.debug("Enabled VFP coprocessor (FPEXC=%#x)", got)
+
     def _setup_entry_arguments(self) -> None:
         """Write AAPCS arguments for the entry function.
 
@@ -1107,6 +1157,12 @@ class ARMEmulator:
             lr = entry + len(binary_data)
             self._uc.reg_write(self._arm_const.UC_ARM_REG_LR, lr)
 
+            # Enable the VFP coprocessor before any firmware instruction runs.
+            # Done here rather than in _initialize_unicorn so it is recorded as
+            # part of establishing the entry state, alongside PC/LR/SP.
+            if self.config.enable_fpu:
+                self._enable_fpu()
+
             # Supply AAPCS arguments so the function sees a caller frame rather
             # than whatever the previous run left in R0-R3.
             self._setup_entry_arguments()
@@ -1151,10 +1207,28 @@ class ARMEmulator:
             result.error_message = str(e)
             result.exit_code = 3
         except Exception as e:  # pylint: disable=broad-except
-            # Check if this is an Unicorn instruction error
+            import unicorn as _unicorn
             from unicorn import UcError
             if isinstance(e, UcError):
-                result.result = EmulationResult.UNSUPPORTED_INSTRUCTION
+                # Classify by Unicorn's error code rather than assuming every
+                # UcError is a bad instruction. UC_ERR_INSN_INVALID means the
+                # engine could not decode; the READ/WRITE/FETCH codes mean the
+                # instruction decoded fine but its memory was not provided.
+                errno = getattr(e, "errno", None)
+                memory_errnos = {
+                    getattr(_unicorn, name, None)
+                    for name in (
+                        "UC_ERR_READ_UNMAPPED", "UC_ERR_WRITE_UNMAPPED",
+                        "UC_ERR_FETCH_UNMAPPED", "UC_ERR_READ_PROT",
+                        "UC_ERR_WRITE_PROT", "UC_ERR_FETCH_PROT",
+                        "UC_ERR_READ_UNALIGNED", "UC_ERR_WRITE_UNALIGNED",
+                        "UC_ERR_FETCH_UNALIGNED",
+                    )
+                } - {None}
+                if errno in memory_errnos:
+                    result.result = EmulationResult.MEMORY_FAULT
+                else:
+                    result.result = EmulationResult.UNSUPPORTED_INSTRUCTION
                 result.error_message = str(e)
                 # Try to capture the PC at time of error
                 try:

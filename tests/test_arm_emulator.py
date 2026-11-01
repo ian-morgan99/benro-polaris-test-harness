@@ -457,9 +457,16 @@ class TestFixtureIntegrity:
             pytest.skip("stage2_region.bin not supplied locally")
 
         recorded = fixture.provenance.get("observed_behaviour", {})
-        assert recorded.get("instructions_executed") == 71
-        assert recorded.get("stub_calls_recorded") == 6
-        assert recorded.get("fault_address") == "0x101bd0"
+        assert recorded.get("instructions_executed") == 275
+        assert recorded.get("stub_calls_recorded") == 21
+        assert recorded.get("fault_address") == "0x102090"
+        # A load through an unpopulated runtime pointer is an environment gap, not
+        # a decoding failure. Recording it as unsupported_instruction is what made
+        # the earlier VFP fault look like a hard engine limit.
+        assert recorded.get("result") == "memory_fault", (
+            f"memory faults must be recorded as memory_fault, got "
+            f"{recorded.get('result')}"
+        )
         assert "superseded" in recorded, (
             "stale measurements must be marked superseded"
         )
