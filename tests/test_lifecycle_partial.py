@@ -34,6 +34,7 @@ from polaris_harness.arm_emulator.fixtures import FixtureManager
 from polaris_harness.arm_emulator.lifecycle import (
     Case1NormalBulbCompletion,
     Case3CancelResultSurvivesStop,
+    Case5DeferredTimedCaptureCancelled,
     LifecycleCase,
     run_all_lifecycle_cases,
 )
@@ -63,6 +64,42 @@ def _probe_dir(tmp_path: Path, mutate=None) -> Path:
     shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d / "stage2_region.bin")
     (d / "stage2_region.json").write_text(json.dumps(sidecar))
     return d
+
+
+class TestCase5TimerOracle:
+    """Timer queries must not be mistaken for an actual cancellation edge."""
+
+    def test_timer_queries_do_not_qualify_cancellation(self, tmp_path):
+        d = tmp_path / "arm"
+        d.mkdir()
+        sidecar = json.loads(
+            (FIXTURES_DIR / "lifecycle_probe_fixture.json").read_text()
+        )
+        sidecar["provenance"]["stub_entries"] = [
+            {"address": 4128, "stub_name": "timer",
+             "function_name": "delayTime", "model": "target"},
+            {"address": 4132, "stub_name": "timer",
+             "function_name": "timediff_now", "model": "target"},
+        ]
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin",
+                    d / "timer_only_fixture.bin")
+        (d / "timer_only_fixture.json").write_text(json.dumps(sidecar))
+
+        result = Case5DeferredTimedCaptureCancelled(
+            LifecycleCase.CASE_5_DEFERRED_TIMED_CAPTURE_CANCELLED,
+            FixtureManager(d), fixture_name="timer_only_fixture",
+        ).run()
+
+        assert result.contract is not None
+        assert [c["function_name"] for c in result.contract.stub_calls] == [
+            "delayTime", "timediff_now"
+        ]
+        assert not any(
+            "Timer was not cancelled before expiry" in error
+            for error in result.assertion_errors
+        )
+        assert not result.passed
+        assert any("cancel_timer" in note for note in result.not_evaluated)
 
 
 class TestNotEvaluatedReporting:

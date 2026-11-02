@@ -132,14 +132,21 @@ class LifecycleScenario:
         self,
         case: LifecycleCase,
         fixture_manager: FixtureManager,
-        fixture_name: str = "tiny_fixture",
+        fixture_name: Optional[str] = None,
         patcher_commit: str = "unknown",
         harness_revision: str = "0.1.0",
         emulator_version: str = "unknown",
+        automatic_fixture_selection: bool = False,
     ):
         self.case = case
         self.fixture_manager = fixture_manager
-        self.fixture_name = fixture_name
+        # Omitting the fixture asks the suite to select the owning region for
+        # this case. Passing a fixture name is an explicit test/operator choice
+        # and must never be silently replaced by a preferred region.
+        self._automatic_fixture_selection = (
+            automatic_fixture_selection or fixture_name is None
+        )
+        self.fixture_name = fixture_name or "tiny_fixture"
         self.patcher_commit = patcher_commit
         self.harness_revision = harness_revision
         self.emulator_version = emulator_version
@@ -275,11 +282,15 @@ class LifecycleScenario:
         Returns:
             Fixture name to execute
         """
-        if not self.preferred_fixture or self.preferred_fixture == self.fixture_name:
+        if (not self._automatic_fixture_selection or not self.preferred_fixture
+                or self.preferred_fixture == self.fixture_name):
             return self.fixture_name
         candidate = self.fixture_manager.get_fixture(self.preferred_fixture)
         if candidate is None or candidate.path is None or not candidate.path.exists():
-            return self.fixture_name
+            # Keep the required owning-region name so run() reports an explicit
+            # SKIP for capture_bulb_image_region rather than executing the
+            # unrelated stage2_region and producing misleading failures.
+            return self.preferred_fixture
         declared = {e.get("function_name") for e in candidate.stub_entries}
         aliases = candidate.boundary_aliases
         owns = any(
@@ -480,6 +491,7 @@ class LifecycleScenario:
                     f"fixture binary not available locally: {self.fixture_name}; "
                     f"{detail}"
                 ),
+                fixture_name=self.fixture_name,
             )
         self._active_fixture = fixture
         self._boundary_aliases = dict(fixture.boundary_aliases)
@@ -845,6 +857,10 @@ class Case4StopFailurePreservesPrimaryError(LifecycleScenario):
 class Case5DeferredTimedCaptureCancelled(LifecycleScenario):
     """Deferred timed capture cancelled before its timer - cancel cannot issue new bulb=0 capture."""
 
+    # A timer query is not evidence of cancellation. The oracle must require the
+    # actual cancel_timer camera edge, or report cancellation as unverified.
+    expected_boundary_functions = ("cancel_timer",)
+
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
         profile.register_all(self.stub_registry)
@@ -868,11 +884,17 @@ class Case5DeferredTimedCaptureCancelled(LifecycleScenario):
     def _assertions(self, contract: ArmEmulationContract) -> List[str]:
         errors = super()._assertions(contract)
 
-        # Timer must have been cancelled. Evaluable: this region declares timer
-        # edges (delayTime, timediff_now), so an absence here is a real signal.
-        timer_calls = [c for c in contract.stub_calls if c["stub_name"] == "timer"]
-        if len(timer_calls) == 0:
-            errors.append("Timer was not cancelled before expiry")
+        # Timer queries (delayTime/timediff_now) do not prove cancellation. Only
+        # the actual cancel_timer camera edge can answer this assertion.
+        if self._evaluable("cancel_timer"):
+            if not self._timer_cancelled:
+                errors.append("Timer was not cancelled before expiry")
+        else:
+            self._not_evaluated.append(
+                "cancel_timer: timer queries were observed, but the executed "
+                "region declares no cancel_timer edge. Cancellation is "
+                "unverified, not passing."
+            )
 
         # No bulb=0 capture should be issued after cancel. The region declares no
         # capture edge, so the flag can never be set and asserting on it would
@@ -1217,6 +1239,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case2MessageStopVsContextCancel(
             LifecycleCase.CASE_2_MESSAGE_STOP_VS_CONTEXT_CANCEL,
@@ -1225,6 +1248,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case3CancelResultSurvivesStop(
             LifecycleCase.CASE_3_CANCEL_RESULT_SURVIVES_STOP,
@@ -1233,6 +1257,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case4StopFailurePreservesPrimaryError(
             LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR,
@@ -1241,6 +1266,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case5DeferredTimedCaptureCancelled(
             LifecycleCase.CASE_5_DEFERRED_TIMED_CAPTURE_CANCELLED,
@@ -1249,6 +1275,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case6NormalTimerExpiry(
             LifecycleCase.CASE_6_NORMAL_TIMER_EXPIRY,
@@ -1257,6 +1284,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case7CallbackOrderingRegisterPreservation(
             LifecycleCase.CASE_7_CALLBACK_ORDERING_REGISTER_PRESERVATION,
@@ -1265,6 +1293,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case8OutputPublicationCleanup(
             LifecycleCase.CASE_8_OUTPUT_PUBLICATION_CLEANUP,
@@ -1273,6 +1302,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
         Case9ManualNonBControl(
             LifecycleCase.CASE_9_MANUAL_NON_B_CONTROL,
@@ -1281,6 +1311,7 @@ def run_all_lifecycle_cases(
             harness_revision=harness_revision,
             emulator_version=emulator_version,
             fixture_name=fixture_name,
+            automatic_fixture_selection=True,
         ),
     ]
 

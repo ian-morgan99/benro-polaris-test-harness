@@ -8,6 +8,7 @@ verifier — they are an independent component.
 
 import hashlib
 import json
+import shutil
 import struct
 import sys
 from pathlib import Path
@@ -2454,7 +2455,35 @@ class TestLifecycleStubEntryWiring:
         for case, res in results.items():
             assert res.skipped, f"{case.value} should SKIP, got passed={res.passed}"
             assert not res.passed
-            assert "stage2_region" in (res.skip_reason or "")
+            expected = (
+                "capture_bulb_image_region"
+                if case in {
+                    LifecycleCase.CASE_1_NORMAL_BULB_COMPLETION,
+                    LifecycleCase.CASE_2_MESSAGE_STOP_VS_CONTEXT_CANCEL,
+                    LifecycleCase.CASE_3_CANCEL_RESULT_SURVIVES_STOP,
+                    LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR,
+                }
+                else "stage2_region"
+            )
+            assert expected in (res.skip_reason or "")
+
+    def test_suite_does_not_fallback_to_unrelated_region_when_owner_missing(self, tmp_path):
+        """Default cases 1-4 must name their absent owning region, not run stage2."""
+        d = tmp_path / "arm"
+        d.mkdir()
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin", d / "stage2_region.bin")
+        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.json", d / "stage2_region.json")
+        results = run_all_lifecycle_cases(FixtureManager(d))
+        for case in (
+            LifecycleCase.CASE_1_NORMAL_BULB_COMPLETION,
+            LifecycleCase.CASE_2_MESSAGE_STOP_VS_CONTEXT_CANCEL,
+            LifecycleCase.CASE_3_CANCEL_RESULT_SURVIVES_STOP,
+            LifecycleCase.CASE_4_STOP_FAILURE_PRESERVES_PRIMARY_ERROR,
+        ):
+            result = results[case]
+            assert result.skipped
+            assert result.fixture_name == "capture_bulb_image_region"
+            assert "capture_bulb_image_region" in (result.skip_reason or "")
 
     def test_suite_executes_real_fixture_when_present(self, tmp_path):
         """With a real fixture present the suite executes it instead of skipping."""
@@ -2462,11 +2491,12 @@ class TestLifecycleStubEntryWiring:
         d = tmp_path / "arm"
         d.mkdir()
         # stage2_region is the name the suite targets by default.
-        shutil.copy(FIXTURES_DIR / "lifecycle_probe_fixture.bin",
-                    d / "stage2_region.bin")
+        probe = FIXTURES_DIR / "lifecycle_probe_fixture.bin"
         sidecar = json.loads(
             (FIXTURES_DIR / "lifecycle_probe_fixture.json").read_text())
-        (d / "stage2_region.json").write_text(json.dumps(sidecar))
+        for name in ("stage2_region", "capture_bulb_image_region"):
+            shutil.copy(probe, d / f"{name}.bin")
+            (d / f"{name}.json").write_text(json.dumps(sidecar))
 
         results = run_all_lifecycle_cases(FixtureManager(d))
         assert len(results) == 9
