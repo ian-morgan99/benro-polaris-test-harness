@@ -532,7 +532,8 @@ def sd_emulate_command(args: argparse.Namespace) -> int:
     )
 
     packets: list = []
-    payloads: dict = {}
+    # The CLI deliberately does not retain an out-of-band packet payload.
+    # Qualification must exercise the bytes read back through FAT.
     if args.packet:
         try:
             payload = packet_from_local_file(Path(args.packet))
@@ -546,7 +547,8 @@ def sd_emulate_command(args: argparse.Namespace) -> int:
             print(f"✗ packet must be named FwPkt.zip or OmsPkt.zip, got {name}")
             return 2
         packets.append((name, payload))
-        payloads[name] = payload
+        # The payload is copied into the emulated card below; the update
+        # simulator must subsequently read it back from the card.
 
     if args.oms_packet:
         try:
@@ -556,7 +558,8 @@ def sd_emulate_command(args: argparse.Namespace) -> int:
             return 2
         name = Path(args.oms_packet).name
         packets.append((name, payload))
-        payloads[name] = payload
+        # The payload is copied into the emulated card below; the update
+        # simulator must subsequently read it back from the card.
 
     try:
         image = build_benro_card(
@@ -582,7 +585,6 @@ def sd_emulate_command(args: argparse.Namespace) -> int:
             image,
             current_version=args.current_version,
             allow_downgrade=args.allow_downgrade,
-            packet_bytes=payloads or None,
         )
     except (PacketLayoutError, PacketIntegrityError) as exc:
         print(f"✗ packet could not be parsed: {exc}")
@@ -593,6 +595,7 @@ def sd_emulate_command(args: argparse.Namespace) -> int:
             print(f"  [{event.state.value:<14}] {event.code}: {event.message}")
 
     print(f"outcome: {report.outcome.value}")
+    print(f"  packet source: {report.packet_source}")
     if report.succeeded:
         print(f"  installed: {report.installed_version} "
               f"(was {report.previous_version})")

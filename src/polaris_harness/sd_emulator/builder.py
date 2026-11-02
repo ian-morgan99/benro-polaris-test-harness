@@ -91,21 +91,22 @@ def build_benro_card(total_bytes: int = 32 * 1024 * 1024 * 1024,
 
 def run_update(image: SDCardImage, current_version: str = "4.0.0.32",
                allow_downgrade: bool = False,
-               packet_bytes: Optional[dict] = None) -> UpdateReport:
+               mock_packet_bytes: Optional[dict] = None) -> UpdateReport:
     """Run one simulated update against a volume.
 
     Args:
         image: the card to read
         current_version: version the device reports beforehand
         allow_downgrade: accept an older packet
-        packet_bytes: payloads keyed by card name, when not reading from FAT
+        mock_packet_bytes: explicit test-only payload injection keyed by card
+            name; omit this for the qualified FAT cluster-chain path
 
     Returns:
         The update report
     """
     device = SimulatedDevice(current_version=current_version,
                              allow_downgrade=allow_downgrade)
-    return device.attempt_update(image, packet_bytes=packet_bytes)
+    return device.attempt_update(image, mock_packet_bytes=mock_packet_bytes)
 
 
 def packet_from_local_file(path: Path) -> bytes:

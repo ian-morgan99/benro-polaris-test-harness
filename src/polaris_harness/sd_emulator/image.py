@@ -41,15 +41,15 @@ BYTES_PER_SECTOR = SECTOR_SIZE
 
 # FAT32 cluster-chain sentinels (bits 28-31 reserved; values below are the ones
 # implementations actually compare against).
-FAT_FREE = 0x0FFFFFFF
+FAT_FREE = 0x00000000
 FAT_END_OF_CHAIN = 0x0FFFFFFF
 FAT_BAD_CLUSTER = 0x0FFFFFF7
 FAT_FIRST_CLUSTER_MARKER = 0x0FFFFFF8
 
 BOOT_SIGNATURE = 0xAA55
 FSINFO_LEAD_SIGNATURE = 0x41615252
-FSINFO_STRUCTURE_SIGNATURE = 0x41615252
-FSINFO_TRAIL_SIGNATURE = 0xAA55
+FSINFO_STRUCTURE_SIGNATURE = 0x61417272
+FSINFO_TRAIL_SIGNATURE = 0xAA550000
 BACKUP_BOOT_SECTOR = 6
 FSINFO_SECTOR = 1
 
@@ -255,16 +255,17 @@ def lfn_checksum(short_name: str) -> int:
     return checksum
 
 
-def pack_short_name(name: str, is_directory: bool) -> str:
+def pack_short_name(name: str, is_directory: bool, sequence: int = 1) -> str:
     """Build the 11-character 8.3 field value for a name.
 
-    Names that do not fit 8.3 get a Windows-style collapsed form (first six
-    characters plus a tilde sequence number), which is what a real formatter
-    writes alongside the LFN entry.
+    Names that do not fit 8.3 get a Windows-style collapsed form. A sequence
+    greater than one is also used for a colliding short name, so aliases remain
+    unique within one directory.
 
     Args:
         name: file or directory name
         is_directory: True for directories
+        sequence: short-name collision sequence, starting at one
 
     Returns:
         Exactly 11 characters, space padded
@@ -274,8 +275,11 @@ def pack_short_name(name: str, is_directory: bool) -> str:
     ext = ext.upper()
     if is_directory:
         ext = ""
-    if len(base) > 8:
-        base = base[:6] + "~1"
+    if sequence < 1:
+        raise ValueError("short-name sequence must be positive")
+    if len(base) > 8 or sequence > 1:
+        tail = f"~{sequence}"
+        base = base[:max(1, 8 - len(tail))] + tail
     return f"{base:<8}{ext:<3}"
 
 
@@ -327,24 +331,31 @@ def encode_lfn_entries(long_name: str, short_field: str) -> List[bytes]:
             struct.pack_into("<H", record, 28 + slot * 2, padded[char_index])
         assert len(record) == 32
         records.append(bytes(record))
-    return records
+    # FAT32 stores the highest ordinal (with LAST flag) first on disk, then
+    # descending ordinals down to one. The decoder reverses this ordering when
+    # reconstructing the Unicode name.
+    return list(reversed(records))
 
 
 def decode_lfn_entries(records: List[bytes]) -> str:
-    """Recover a long name from its LFN records.
+    """Recover a long name from its on-disk LFN records.
 
-    Args:
-        records: the records in first-to-last order
-
-    Returns:
-        The decoded name, truncated at the NUL terminator
+    FAT32 stores LFN records in descending ordinal order, with the highest
+    ordinal carrying the LAST flag and appearing first.
 
     Raises:
         ImageCorruptionError: if a record is malformed or ordinals are out of
             sequence. A partially readable name would silently present a
             corrupted volume as a valid one.
     """
-    units: List[int] = []
+    if not records:
+        raise ImageCorruptionError("LFN sequence is empty")
+    first_ordinal = records[0][0]
+    total = first_ordinal & 0x3F
+    if total == 0 or not (first_ordinal & 0x40):
+        raise ImageCorruptionError("LFN sequence has invalid first ordinal")
+
+    chunks: Dict[int, List[int]] = {}
     for position, raw in enumerate(records):
         if len(raw) != 32:
             raise ImageCorruptionError("LFN record must be 32 bytes")
@@ -354,23 +365,38 @@ def decode_lfn_entries(records: List[bytes]) -> str:
                 f"{ATTR_LFN:#04x}"
             )
         ordinal = raw[0]
-        if (ordinal & 0x3F) != position + 1:
+        ordinal_number = ordinal & 0x3F
+        expected = total - position
+        if ordinal_number != expected:
             raise ImageCorruptionError(
-                f"LFN record {position} has ordinal {ordinal & 0x3F}"
+                f"LFN record {position} has ordinal {ordinal_number}; "
+                f"expected {expected}"
             )
+        if position == 0 and not (ordinal & 0x40):
+            raise ImageCorruptionError("LFN first record is missing LAST flag")
+        if position > 0 and (ordinal & 0x40):
+            raise ImageCorruptionError("LFN LAST flag appears before final record")
+
+        chunk: List[int] = []
         for offset in (1, 14, 28):
             span = 10 if offset == 1 else (12 if offset == 14 else 4)
             for i in range(0, span, 2):
-                units.append(struct.unpack_from("<H", raw, offset + i)[0])
-        if ordinal & 0x40:
-            break
+                chunk.append(struct.unpack_from("<H", raw, offset + i)[0])
+        chunks[ordinal_number] = chunk
 
-    # Trim padding and the NUL terminator.
+    if set(chunks) != set(range(1, total + 1)):
+        raise ImageCorruptionError("LFN sequence has missing ordinals")
+    units = [
+        unit
+        for ordinal_number in range(1, total + 1)
+        for unit in chunks[ordinal_number]
+    ]
+
     while units and units[-1] == 0xFFFF:
         units.pop()
     if 0x0000 in units:
         units = units[:units.index(0x0000)]
-    return "".join(chr(u) for u in units)
+    return "".join(chr(unit) for unit in units)
 
 
 def case_flags_for(name: str) -> int:
@@ -420,7 +446,8 @@ def pack_short_entry(entry: DirectoryEntry) -> bytes:
     Returns:
         Exactly 32 bytes
     """
-    short = pack_short_name(entry.name, entry.is_directory)
+    short = (entry.short_name if len(entry.short_name) == 11
+             else pack_short_name(entry.name, entry.is_directory))
     attrs = entry.attributes | (ATTR_DIRECTORY if entry.is_directory else 0)
     date, time = entry.mtime
     cluster = entry.first_cluster & 0xFFFFFFFF
@@ -510,6 +537,7 @@ class SDCardImage:
         self._fat: List[int] = []
         self._root_entries: List[bytes] = []
         self._dir_clusters: Dict[int, List[bytes]] = {}
+        self._used_short_names: Dict[Optional[int], set[str]] = {None: set()}
         # Reserve the root directory's clusters before anything else allocates.
         # Cluster 2 is the FAT32 root; if allocation started there too, the
         # first file written would overwrite the root directory and the volume
@@ -630,6 +658,17 @@ class SDCardImage:
         self._next_free_cluster = cluster + 1
         return cluster
 
+    def _allocate_short_name(self, name: str, is_directory: bool,
+                             parent_cluster: Optional[int]) -> str:
+        """Allocate a unique 8.3 alias within one directory."""
+        used = self._used_short_names.setdefault(parent_cluster, set())
+        for sequence in range(1, 10_000):
+            short = pack_short_name(name, is_directory, sequence)
+            if short not in used:
+                used.add(short)
+                return short
+        raise BlockAllocationError(f"no short-name alias available for {name!r}")
+
     def _chain(self, first: int, count: int) -> List[int]:
         """Link `count` consecutive clusters starting at `first`.
 
@@ -724,10 +763,10 @@ class SDCardImage:
         struct.pack_into("<I", sector, 44, 2)         # root cluster
         struct.pack_into("<H", sector, 48, 1)         # FSINFO sector
         struct.pack_into("<H", sector, 50, BACKUP_BOOT_SECTOR)
-        sector[66] = 0x80                             # drive number
-        sector[67] = 0x00
-        sector[68] = 0x29                             # boot signature present
-        struct.pack_into("<I", sector, 69, 0x12345678)  # volume serial
+        sector[64] = 0x80                             # drive number
+        sector[65] = 0x00                             # reserved
+        sector[66] = 0x29                             # boot signature present
+        struct.pack_into("<I", sector, 67, 0x12345678)  # volume serial
         sector[71:82] = self.volume_label.ljust(11).encode("ascii")[:11]
         sector[82:90] = b"FAT32   "
         struct.pack_into("<H", sector, 510, BOOT_SIGNATURE)
@@ -736,19 +775,32 @@ class SDCardImage:
         # Backup boot sector is a byte copy.
         self.write_sector(BACKUP_BOOT_SECTOR, bytes(sector))
 
-        # FSINFO: free-cluster and next-free hints.
-        # FSINFO layout: lead signature at 0, a second structure signature at
-        # 488, free-cluster count at 496, next-free hint at 500, and the trail
-        # signature as a 16-bit value at 510. Writing these at guessed offsets
-        # produced struct errors and, worse, would present a sector a real
-        # reader treats as invalid.
+        # FAT32 reserves the first two entries in every FAT. Root directory
+        # clusters are linked when the directory is flushed, after its required
+        # length is known; cluster 2 is kept available as the root start.
+        self.set_fat_entry(0, FAT_FIRST_CLUSTER_MARKER)
+        self.set_fat_entry(1, FAT_END_OF_CHAIN)
+        if not self._boot_written:
+            self.set_fat_entry(2, FAT_END_OF_CHAIN)
+
+        # FSINFO: free-cluster and next-free hints. FAT32 places the structure
+        # signature at 484, the counters at 488/492, and a four-byte trailing
+        # signature at 508. These offsets are part of the on-card contract.
         fsinfo = bytearray(BYTES_PER_SECTOR)
         struct.pack_into("<I", fsinfo, 0, FSINFO_LEAD_SIGNATURE)
-        struct.pack_into("<I", fsinfo, 488, FSINFO_STRUCTURE_SIGNATURE)
-        used = self._next_free_cluster - 2
-        struct.pack_into("<I", fsinfo, 496, max(0, geometry.cluster_count - used))
-        struct.pack_into("<I", fsinfo, 500, self._next_free_cluster)
-        struct.pack_into("<H", fsinfo, 510, FSINFO_TRAIL_SIGNATURE)
+        struct.pack_into("<I", fsinfo, 484, FSINFO_STRUCTURE_SIGNATURE)
+        used = sum(
+            self.get_fat_entry(cluster) != FAT_FREE
+            for cluster in range(2, geometry.cluster_count + 2)
+        )
+        struct.pack_into("<I", fsinfo, 488, max(0, geometry.cluster_count - used))
+        next_free = next(
+            (cluster for cluster in range(2, geometry.cluster_count + 2)
+             if self.get_fat_entry(cluster) == FAT_FREE),
+            0xFFFFFFFF,
+        )
+        struct.pack_into("<I", fsinfo, 492, next_free)
+        struct.pack_into("<I", fsinfo, 508, FSINFO_TRAIL_SIGNATURE)
         self.write_sector(FSINFO_SECTOR, bytes(fsinfo))
 
         self._boot_written = True
@@ -784,7 +836,7 @@ class SDCardImage:
 
         entry = DirectoryEntry(
             name=path,
-            short_name=pack_short_name(path, False),
+            short_name=self._allocate_short_name(path, False, parent_cluster),
             is_directory=False,
             size=len(data),
             first_cluster=first,
@@ -805,11 +857,13 @@ class SDCardImage:
         Returns:
             The written entry, whose first_cluster is the new directory's
         """
+        short_name = self._allocate_short_name(name, True, parent_cluster)
         cluster = self._alloc_cluster()
+        self._used_short_names.setdefault(cluster, set())
         self.set_fat_entry(cluster, FAT_END_OF_CHAIN)
         entry = DirectoryEntry(
             name=name,
-            short_name=pack_short_name(name, True),
+            short_name=short_name,
             is_directory=True,
             size=0,
             first_cluster=cluster,
@@ -821,7 +875,9 @@ class SDCardImage:
         dot = pack_short_entry(DirectoryEntry(
             name=".", short_name=".          ", is_directory=True, size=0,
             first_cluster=cluster, attributes=ATTR_DIRECTORY))
-        parent_target = 2 if parent_cluster is None else parent_cluster
+        # FAT32 uses cluster zero in a subdirectory's '..' entry when its
+        # parent is the root directory; the root itself has no directory entry.
+        parent_target = 0 if parent_cluster is None else parent_cluster
         dotdot = pack_short_entry(DirectoryEntry(
             name="..", short_name="..         ", is_directory=True, size=0,
             first_cluster=parent_target, attributes=ATTR_DIRECTORY))
@@ -830,8 +886,12 @@ class SDCardImage:
 
     def _entry_records(self, entry: DirectoryEntry) -> List[bytes]:
         """Build the LFN records plus short record for one entry."""
-        short_field = pack_short_name(entry.name, entry.is_directory)
-        if fits_83(entry.name, entry.is_directory):
+        short_field = entry.short_name
+        needs_lfn = (
+            not fits_83(entry.name, entry.is_directory)
+            or short_field != pack_short_name(entry.name, entry.is_directory)
+        )
+        if not needs_lfn:
             return [pack_short_entry(entry)]
         return encode_lfn_entries(entry.name, short_field) + [pack_short_entry(entry)]
 
@@ -856,12 +916,22 @@ class SDCardImage:
                          // self.geometry.cluster_bytes)
             # The directory already owns one cluster; extend the chain if needed.
             existing = self.get_fat_entry(cluster)
+            chain = [cluster]
             if needed > 1:
                 extra_first = self._alloc_cluster()
-                self._chain(extra_first, needed - 1)
+                extra_chain = self._chain(extra_first, needed - 1)
                 self.set_fat_entry(cluster, extra_first)
-            self.write_cluster_data(cluster, payload.ljust(
-                needed * self.geometry.cluster_bytes, b"\x00"))
+                chain.extend(extra_chain)
+            # Directory clusters need not be physically contiguous. Write each
+            # chunk through the FAT chain rather than spilling into unrelated
+            # file clusters between the first and extension clusters.
+            for index, directory_cluster in enumerate(chain):
+                chunk = payload[index * self.geometry.cluster_bytes:
+                                (index + 1) * self.geometry.cluster_bytes]
+                self.write_cluster_data(
+                    directory_cluster,
+                    chunk.ljust(self.geometry.cluster_bytes, b"\x00"),
+                )
         self.write_boot_sector()
 
     def _write_root(self) -> None:
@@ -882,15 +952,23 @@ class SDCardImage:
                 f"{self.root_clusters} are reserved; increase root_clusters"
             )
         root_first = 2
-        if needed > 1:
-            self._chain(root_first, needed)
-        else:
-            self.set_fat_entry(root_first, FAT_END_OF_CHAIN)
-        # Zero the whole reservation so a reader sees end-of-directory rather
+        # Release the reserved range before linking exactly the number of root
+        # clusters needed. Unused reserved clusters remain genuinely free and
+        # cannot appear as orphaned FAT allocations to an independent checker.
+        for cluster in range(root_first, root_first + self.root_clusters):
+            self.set_fat_entry(cluster, FAT_FREE)
+        self._chain(root_first, needed)
+        # Zero the whole root chain so a reader sees end-of-directory rather
         # than stale bytes past the last entry.
         for offset in range(needed):
-            self.write_cluster_data(root_first + offset, b"\x00" * self.geometry.cluster_bytes)
-        self.write_bytes(self._cluster_sector(root_first) * BYTES_PER_SECTOR, payload)
+            self.write_cluster_data(root_first + offset,
+                                    b"\x00" * self.geometry.cluster_bytes)
+        for offset in range(needed):
+            chunk = payload[offset * self.geometry.cluster_bytes:
+                            (offset + 1) * self.geometry.cluster_bytes]
+            self.write_cluster_data(root_first + offset,
+                                    chunk.ljust(self.geometry.cluster_bytes,
+                                                b"\x00"))
 
     # -- reading back --------------------------------------------------------
 

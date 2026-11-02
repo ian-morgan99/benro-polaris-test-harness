@@ -24,7 +24,9 @@ partition math.
 
 import hashlib
 import io
+import shutil
 import struct
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -49,8 +51,11 @@ from polaris_harness.sd_emulator.image import (
     ATTR_LFN,
     BOOT_SIGNATURE,
     BYTES_PER_SECTOR,
+    FAT_END_OF_CHAIN,
+    FAT_FIRST_CLUSTER_MARKER,
     FSINFO_SECTOR,
     FSINFO_STRUCTURE_SIGNATURE,
+    FSINFO_TRAIL_SIGNATURE,
     decode_lfn_entries,
     encode_lfn_entries,
     fits_83,
@@ -176,8 +181,12 @@ class TestBootSector:
     def test_fsinfo_signatures_at_spec_offsets(self, image):
         fsinfo = image.read_sector(FSINFO_SECTOR)
         assert struct.unpack_from("<I", fsinfo, 0)[0] == 0x41615252
-        assert struct.unpack_from("<I", fsinfo, 488)[0] == FSINFO_STRUCTURE_SIGNATURE
-        assert struct.unpack_from("<H", fsinfo, 510)[0] == 0xAA55
+        assert struct.unpack_from("<I", fsinfo, 484)[0] == FSINFO_STRUCTURE_SIGNATURE
+        free_count = struct.unpack_from("<I", fsinfo, 488)[0]
+        next_free = struct.unpack_from("<I", fsinfo, 492)[0]
+        assert 0 < free_count < image.geometry.cluster_count
+        assert image.get_fat_entry(next_free) == 0
+        assert struct.unpack_from("<I", fsinfo, 508)[0] == FSINFO_TRAIL_SIGNATURE
 
     def test_volume_label_written(self, image):
         boot = image.read_sector(0)
@@ -206,9 +215,16 @@ class TestShortNamesAndLfn:
         records = encode_lfn_entries("FwPkt.zip", short)
         assert all(len(r) == 32 for r in records)
         assert all(r[11] == ATTR_LFN for r in records)
-        # Last record carries the end-of-sequence flag.
-        assert records[-1][0] & 0x40
-        assert not any(r[0] & 0x40 for r in records[:-1])
+        # The one-record sequence carries LAST on its first/on-disk record.
+        assert records[0][0] & 0x40
+
+    def test_lfn_ordinals_are_descending_on_disk(self):
+        long_name = "Mlog_000063.log.bak"
+        records = encode_lfn_entries(long_name, pack_short_name(long_name, False))
+        assert len(records) == 2
+        assert [record[0] for record in records] == [0x42, 0x01]
+        assert records[0][0] & 0x40
+        assert not records[1][0] & 0x40
 
     def test_lfn_roundtrip(self):
         for name in ("FwPkt.zip", "OmsPkt.zip", "focusStack", "starskyStack",
@@ -297,6 +313,17 @@ class TestVolumeReadWrite:
         # first file written would overwrite the root directory and the volume
         # would read back empty rather than corrupt.
         assert image._next_free_cluster > 2 + image.root_clusters
+
+    def test_reserved_fat_entries_are_initialized_in_both_copies(self, image):
+        for cluster, expected in ((0, FAT_FIRST_CLUSTER_MARKER),
+                                  (1, FAT_END_OF_CHAIN)):
+            sector, offset = image._fat_entry_offset(cluster)
+            for copy in range(image.geometry.fat_copies):
+                fat_sector = (image.geometry.reserved_sectors
+                              + copy * image.geometry.sectors_per_fat + sector)
+                value = struct.unpack_from("<I", image.read_sector(fat_sector),
+                                           offset)[0]
+                assert value & 0x0FFFFFFF == expected
 
     def test_fat_written_to_both_copies(self, image):
         image.add_file("probe.bin", b"z" * 100)
@@ -469,7 +496,7 @@ class TestSimulatedUpdate:
         payload = build_packet_bytes()
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice(current_version="4.0.0.32")
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
 
         assert report.outcome is UpdateOutcome.UPDATED
         assert report.installed_version == "6.0.0.54.90"
@@ -482,7 +509,7 @@ class TestSimulatedUpdate:
         payload = build_packet_bytes()
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice(current_version="4.0.0.32")
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         for partition in report.partitions_written:
             assert partition in MTD_PARTITIONS
 
@@ -501,7 +528,7 @@ class TestSimulatedUpdate:
         oms = build_packet_bytes(version="6.0.0.54.90")
         volume, payloads = self._card_with(("FwPkt.zip", fw), ("OmsPkt.zip", oms))
         device = SimulatedDevice()
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
 
         assert report.outcome is UpdateOutcome.AMBIGUOUS_PACKETS
         assert "refusing to guess precedence" in " ".join(report.failures)
@@ -511,7 +538,7 @@ class TestSimulatedUpdate:
         payload = build_packet_bytes(version="3.0.0.10")
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice(current_version="4.0.0.32")
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         assert report.outcome is UpdateOutcome.VERSION_REJECTED
         assert device.current_version == "4.0.0.32", "must not have changed"
 
@@ -519,20 +546,20 @@ class TestSimulatedUpdate:
         payload = build_packet_bytes(version="3.0.0.10")
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice(current_version="4.0.0.32", allow_downgrade=True)
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         assert report.outcome is UpdateOutcome.UPDATED
 
     def test_invalid_packet_reports_invalid_not_updated(self):
         volume, payloads = self._card_with(("FwPkt.zip", b"not a zip at all"))
         device = SimulatedDevice()
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         assert report.outcome is UpdateOutcome.INVALID_PACKET
 
     def test_missing_component_fails_closed(self):
         payload = build_packet_bytes(drop=("appfs",))
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice()
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         assert report.outcome is UpdateOutcome.INVALID_PACKET
         assert "appfs" in " ".join(report.failures)
 
@@ -544,7 +571,7 @@ class TestSimulatedUpdate:
             "appfs": huge, "polaris403": b"g", "polaris413": b"h"})
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice()
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         assert report.outcome is UpdateOutcome.WRITE_FAILED
         assert "capacity" in " ".join(report.failures)
 
@@ -552,7 +579,7 @@ class TestSimulatedUpdate:
         payload = build_packet_bytes()
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice(current_version="4.0.0.32")
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         states = [e.state for e in report.events]
         assert states[0] is DeviceState.CARD_MOUNTED
         assert states[-1] is DeviceState.UPDATED
@@ -564,10 +591,50 @@ class TestSimulatedUpdate:
         payload = build_packet_bytes()
         volume, payloads = self._card_with(("FwPkt.zip", payload))
         device = SimulatedDevice(current_version="4.0.0.32")
-        report = device.attempt_update(volume, packet_bytes=payloads)
+        report = device.attempt_update(volume, mock_packet_bytes=payloads)
         text = json.dumps(report.to_dict())
         assert "updated" in text
         assert "/home" not in text
+
+    def test_stale_out_of_band_payload_cannot_bypass_card_bytes(self):
+        payload = build_packet_bytes()
+        volume, stale_payloads = self._card_with(("FwPkt.zip", payload))
+        entry = next(e for e in volume.list_root() if e.name == "FwPkt.zip")
+        first_cluster = bytearray(
+            volume.read_bytes(volume._cluster_sector(entry.first_cluster)
+                              * BYTES_PER_SECTOR,
+                              volume.geometry.cluster_bytes)
+        )
+        first_cluster[0] ^= 0xFF
+        volume.write_cluster_data(entry.first_cluster, bytes(first_cluster))
+
+        # The SD-qualified path reads the mutated cluster chain and must reject
+        # it, even though the original bytes remain available in this stale
+        # out-of-band fixture.
+        device = SimulatedDevice(current_version="4.0.0.32")
+        report = device.attempt_update(volume)
+        assert report.packet_source == "fat-cluster-chain"
+        assert report.outcome is UpdateOutcome.INVALID_PACKET
+
+        # Direct injection remains available only as an explicitly labelled
+        # mock path for small unit tests; it is not the qualified result.
+        mock_report = SimulatedDevice(current_version="4.0.0.32").attempt_update(
+            volume, mock_packet_bytes=stale_payloads
+        )
+        assert mock_report.packet_source == "mock-only"
+        assert mock_report.outcome is UpdateOutcome.UPDATED
+
+    def test_fsck_fat_accepts_generated_card(self, tmp_path):
+        checker = shutil.which("fsck.fat") or shutil.which("fsck.vfat")
+        if checker is None:
+            pytest.skip("fsck.fat/fsck.vfat not installed")
+        from polaris_harness.sd_emulator import build_benro_card
+        volume = build_benro_card(total_bytes=TEST_VOLUME_BYTES, log_count=2)
+        image_path = tmp_path / "benro-card.img"
+        volume.write_to(image_path)
+        result = subprocess.run([checker, "-n", str(image_path)],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
 
     def test_packet_read_from_volume_when_not_supplied(self):
         payload = build_packet_bytes()
@@ -575,6 +642,7 @@ class TestSimulatedUpdate:
         device = SimulatedDevice(current_version="4.0.0.32")
         report = device.attempt_update(volume)
         assert report.outcome is UpdateOutcome.UPDATED
+        assert report.packet_source == "fat-cluster-chain"
 
 
 class TestRealPacketFidelity:
@@ -675,6 +743,7 @@ class TestCli:
         assert code == 0
         out = capsys.readouterr().out
         assert "outcome: updated" in out
+        assert "packet source: fat-cluster-chain" in out
         assert "6.0.0.54.90" in out
 
     def test_downgrade_is_behavioural_failure(self, tmp_path):

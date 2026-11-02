@@ -273,9 +273,17 @@ class FirmwarePacket:
 
         digest = hashlib.sha256(payload).hexdigest()
         with archive:
-            return cls._parse(archive, kind=kind, label=label,
-                              sha256=digest, size_bytes=len(payload),
-                              archive_path=None)
+            try:
+                return cls._parse(archive, kind=kind, label=label,
+                                  sha256=digest, size_bytes=len(payload),
+                                  archive_path=None)
+            except zipfile.BadZipFile as exc:
+                # A card can contain a truncated or partially overwritten ZIP
+                # whose central directory opens but whose member read fails.
+                # Keep that on the same fail-closed layout path as a bad header.
+                raise PacketLayoutError(
+                    f"{label} is not a readable zip member: {exc}"
+                ) from exc
 
     @classmethod
     def _parse(cls, archive: zipfile.ZipFile, kind: str, label: str,

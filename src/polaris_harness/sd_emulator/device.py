@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
-from .image import SDCardImage
+from .image import ImageCorruptionError, SDCardImage
 from .packet import (
     ComponentRecord,
     FirmwarePacket,
@@ -98,6 +98,8 @@ class UpdateReport:
         events: every step taken, in order
         installed_version: version now reported by the device, if updated
         previous_version: version before the attempt
+        packet_source: ``fat-cluster-chain`` for the qualified card path, or
+            ``mock-only`` when tests explicitly inject archive bytes
         partitions_written: simulated MTD partition names written
         bytes_written: total payload bytes across those partitions
         failures: reasons for failure, empty on success
@@ -107,6 +109,7 @@ class UpdateReport:
     events: List[DeviceEvent]
     installed_version: Optional[str]
     previous_version: str
+    packet_source: str = "fat-cluster-chain"
     partitions_written: List[str] = field(default_factory=list)
     bytes_written: int = 0
     failures: List[str] = field(default_factory=list)
@@ -122,6 +125,7 @@ class UpdateReport:
             "succeeded": self.succeeded,
             "installed_version": self.installed_version,
             "previous_version": self.previous_version,
+            "packet_source": self.packet_source,
             "partitions_written": list(self.partitions_written),
             "bytes_written": self.bytes_written,
             "failures": list(self.failures),
@@ -178,6 +182,7 @@ class SimulatedDevice:
         self.events: List[DeviceEvent] = []
         # partition name -> sha256 of the payload last written there.
         self._partition_contents: Dict[str, str] = {}
+        self._packet_source = "fat-cluster-chain"
 
     # -- event log -----------------------------------------------------------
 
@@ -205,26 +210,28 @@ class SimulatedDevice:
     # -- update flow ---------------------------------------------------------
 
     def attempt_update(self, image: SDCardImage,
-                       packet_bytes: Optional[Dict[str, bytes]] = None) -> UpdateReport:
+                       mock_packet_bytes: Optional[Dict[str, bytes]] = None) -> UpdateReport:
         """Run the whole SD-card update flow against a volume.
 
         Args:
             image: the SD volume to read
-            packet_bytes: archive contents keyed by card name ("FwPkt.zip").
-                The emulator keeps packet payloads out of the FAT when they are
-                large, so callers can supply bytes directly; otherwise the file
-                is read from the volume.
+            mock_packet_bytes: test-only archive contents keyed by card name.
+                This is an explicitly non-qualified fast path. When omitted,
+                the packet is always read from the FAT cluster chain.
 
         Returns:
             UpdateReport describing every step and the terminal outcome
         """
         self.events = []
+        self._packet_source = ("mock-only" if mock_packet_bytes is not None
+                               else "fat-cluster-chain")
         previous = self.current_version
         partitions: List[str] = []
         total_bytes = 0
 
         self._enter(DeviceState.CARD_MOUNTED, "card_mounted",
-                    "mounted SD card at /app/sd")
+                    "mounted SD card at /app/sd",
+                    packet_source=self._packet_source)
 
         present = self.find_packets(image)
         if not present:
@@ -250,14 +257,21 @@ class SimulatedDevice:
 
         name = present[0]
         self._enter(DeviceState.PACKET_FOUND, "packet_found",
-                    f"found {name}", packet=name)
+                    f"found {name}", packet=name,
+                    packet_source=self._packet_source)
 
         try:
-            payload = (packet_bytes or {}).get(name)
-            if payload is None:
+            if mock_packet_bytes is not None:
+                payload = mock_packet_bytes.get(name)
+                if payload is None:
+                    raise PacketLayoutError(
+                        f"mock-only payload missing for discovered packet {name}"
+                    )
+            else:
                 payload = image.read_file(name)
             packet = _packet_from_bytes(payload, name)
-        except (PacketLayoutError, PacketIntegrityError) as exc:
+        except (ImageCorruptionError, PacketLayoutError,
+                PacketIntegrityError) as exc:
             self._enter(DeviceState.FAILED, "invalid_packet", str(exc))
             return self._report(UpdateOutcome.INVALID_PACKET, previous, partitions,
                                 total_bytes, [str(exc)])
@@ -351,6 +365,7 @@ class SimulatedDevice:
             installed_version=installed if installed is not None else (
                 self.current_version if outcome is UpdateOutcome.UPDATED else None),
             previous_version=previous,
+            packet_source=self._packet_source,
             partitions_written=list(partitions),
             bytes_written=total_bytes,
             failures=list(failures),
