@@ -27,15 +27,10 @@ instruction against the wrong encoding and can report success over garbage. A
 lifecycle case would then assert against register values produced by instructions
 that never ran, and the report would look like a valid emulation of the artifact.
 
-Observed behaviour these tests pin down:
-  ARM blob, thumb mode : PASS, exit 0, R0=0, ~4279 instructions
-  Thumb blob, arm mode : usually MEMORY_FAULT, but PASS in roughly 1 run in 20
-
-Both directions leave R0 unset and execute far more than one instruction, so the
-register value is the reliable signal. The reported classification is not: run()
-decides PASS/exit 0 unless one of three flags is set (instruction limit, unsupported
-instruction, unexpected syscall), so a run that stops for any other reason is
-indistinguishable from a successful one. That gap is recorded on #23.
+The completion classifier now treats any run that does not reach the expected
+end of its region as a failure. The regression below therefore checks both the
+semantic register mismatch and the machine-readable non-PASS result: a region with
+the wrong mode must never qualify as a successful emulation.
 """
 
 import hashlib
@@ -169,14 +164,10 @@ class TestModeMisDecoding:
         )
 
     def test_mis_decoding_never_looks_like_a_clean_run(self, tmp_path):
-        """Neither mis-decoding direction may resemble a correct single step.
+        """Neither mis-decoding direction may qualify as a clean run.
 
-        This is the invariant that survives the classification instability: whatever
-        the harness reports, a mis-decoded blob never executes exactly one
-        instruction and never sets R0 to the value the correctly-decoded blob sets.
-        A caller comparing register values therefore still detects the problem; a
-        caller checking only exit_code does not, because both directions can report
-        PASS with exit 0.
+        The selected mode is part of the fixture provenance. A wrong-mode run may
+        produce a memory fault or another failure, but it must never report PASS.
         """
         correct_arm = _run(ARM_MOV_R0_1, "arm", tmp_path)
         correct_thumb = _run(THUMB_MOV_R0_1, "thumb", tmp_path)
@@ -185,6 +176,10 @@ class TestModeMisDecoding:
 
         for blob, wrong_mode in ((ARM_MOV_R0_1, "thumb"), (THUMB_MOV_R0_1, "arm")):
             result = _run(blob, wrong_mode, tmp_path)
+            assert result.result != EmulationResult.PASS, (
+                f"{blob.hex()} in {wrong_mode} mode was incorrectly classified as PASS"
+            )
+            assert result.exit_code != 0
             assert result.final_registers.get("R0") != 1, (
                 f"{blob.hex()} in {wrong_mode} mode produced the correct result"
             )
