@@ -557,6 +557,51 @@ class TestFixtureIntegrity:
             f"clearing the gate must reach the event loop, saw {sorted(seen)}"
         )
 
+    def test_event_return_value_terminates_the_loop(self):
+        """A case pinning wait_and_handle_event's return must exit the loop.
+
+        The default handler returns 0, and the artifact tests the result with
+        `cmn r3,#0x34; beq 0x102204`, so 0 is not a recognised exit and every run
+        spins to the instruction limit. That truncation was reported as a plain
+        FAIL with no hint that the cause was stub behaviour rather than firmware,
+        so both directions are pinned here: unset still truncates, and -52 exits.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("stage2_region")
+        if fixture is None:
+            pytest.skip("stage2_region.bin not supplied locally")
+        available, reason = manager.source_binary_available("stage2_region")
+        if not available:
+            pytest.skip(reason)
+
+        from polaris_harness.arm_emulator.lifecycle import (
+            Case5DeferredTimedCaptureCancelled,
+        )
+
+        class Pinned(Case5DeferredTimedCaptureCancelled):
+            event_return_value = -52
+
+        def run(cls):
+            scenario = cls(
+                "case5", manager, fixture_name="stage2_region",
+                patcher_commit="x", harness_revision="0.1.0",
+                emulator_version="u",
+            )
+            return scenario.run()
+
+        unpinned = run(Case5DeferredTimedCaptureCancelled)
+        assert any(
+            "timeout" in e for e in (unpinned.assertion_errors or [])
+        ), "without a pinned return the loop must still truncate"
+
+        pinned = run(Pinned)
+        assert not any(
+            "timeout" in e for e in (pinned.assertion_errors or [])
+        ), (
+            f"pinning -52 must exit the loop via 0x102204, got "
+            f"{pinned.assertion_errors}"
+        )
+
     def test_stub_call_fixture_exists(self):
         """Stub-call fixture binary must exist."""
         fixture_path = FIXTURES_DIR / "stub_call_fixture.bin"

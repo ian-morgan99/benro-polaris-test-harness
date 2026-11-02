@@ -163,6 +163,23 @@ class LifecycleScenario:
     # boundary the case asserts on.
     preferred_fixture: Optional[str] = None
 
+    # What wait_and_handle_event returns for this case, or None to leave the
+    # profile's default in place.
+    #
+    # The default handler returns 0, and the loop at 0x101f78 tests the result
+    # with `cmn r3,#0x34; beq 0x102204` - so 0 is not a recognised exit and the
+    # run spins until the instruction limit. Cases that need the loop to terminate
+    # must say which exit they are exercising instead of inheriting that default.
+    #
+    # Two exits exist in the artifact:
+    #   -52 (0x34 negated) -> 0x102204, the publication/cancel route
+    #   a state word at fp-0x84 equal to 4 -> 0x101fe0
+    # Only the first is characterised well enough to pin, so cases asserting on it
+    # set -52. A case that needs the second must not fake it with -52: that would
+    # route through the cancel path and assert something about a branch the case
+    # never intended to exercise.
+    event_return_value: Optional[int] = None
+
     def _setup_stubs(self) -> None:
         """Set up stubs for this scenario. Override in subclasses."""
         profile = create_default_profile()
@@ -196,7 +213,20 @@ class LifecycleScenario:
         emulator = ARMEmulator(config)
 
         # Register stubs with the emulator, carrying per-boundary ABI shapes.
-        for name, handler in self.stub_registry._handlers.items():
+        handlers = dict(self.stub_registry._handlers)
+        if self.event_return_value is not None:
+            base = handlers.get("camera")
+            if base is not None:
+                pinned = self.event_return_value
+
+                def pinned_camera(function_name, arguments, snapshot,
+                                  _base=base, _value=pinned):
+                    if function_name == "wait_and_handle_event":
+                        return _value
+                    return _base(function_name, arguments, snapshot)
+
+                handlers["camera"] = pinned_camera
+        for name, handler in handlers.items():
             emulator.register_stub(name, handler)
         for name, shape in getattr(self.stub_registry, "_abi_shapes", {}).items():
             emulator.set_stub_abi_shape(name, shape)
@@ -831,14 +861,24 @@ class Case5DeferredTimedCaptureCancelled(LifecycleScenario):
     def _assertions(self, contract: ArmEmulationContract) -> List[str]:
         errors = super()._assertions(contract)
 
-        # Timer must have been cancelled
+        # Timer must have been cancelled. Evaluable: this region declares timer
+        # edges (delayTime, timediff_now), so an absence here is a real signal.
         timer_calls = [c for c in contract.stub_calls if c["stub_name"] == "timer"]
         if len(timer_calls) == 0:
             errors.append("Timer was not cancelled before expiry")
 
-        # No bulb=0 capture should be issued after cancel
-        if self._bulb_zero_capture_issued:
-            errors.append("Cancel must not issue a new bulb=0 capture")
+        # No bulb=0 capture should be issued after cancel. The region declares no
+        # capture edge, so the flag can never be set and asserting on it would
+        # report a vacuous pass rather than a real guarantee.
+        if self._evaluable("capture"):
+            if self._bulb_zero_capture_issued:
+                errors.append("Cancel must not issue a new bulb=0 capture")
+        else:
+            self._not_evaluated.append(
+                "capture: expected no bulb=0 capture after cancel, but the "
+                "executed region contains no capture edge to observe. "
+                "Unverified, not passing."
+            )
 
         return errors
 
@@ -871,13 +911,28 @@ class Case6NormalTimerExpiry(LifecycleScenario):
     def _assertions(self, contract: ArmEmulationContract) -> List[str]:
         errors = super()._assertions(contract)
 
-        # Timer must have expired
-        if not self._timer_expired:
-            errors.append("Timer expiry was not observed")
+        # Both assertions depend on edges this region does not declare: it has
+        # delayTime/timediff_now but no timer_expiry, and no capture edge. Left
+        # unguarded they report "not observed" as a firmware regression when the
+        # artifact simply cannot answer the question.
+        if self._evaluable("timer_expiry"):
+            if not self._timer_expired:
+                errors.append("Timer expiry was not observed")
+        else:
+            self._not_evaluated.append(
+                "timer_expiry: expected the timer to expire, but the executed "
+                "region declares no timer_expiry edge (only delayTime and "
+                "timediff_now). Unverified, not passing."
+            )
 
-        # Capture must still be issued after normal timer expiry
-        if not self._capture_issued:
-            errors.append("Capture was not issued after normal timer expiry")
+        if self._evaluable("capture"):
+            if not self._capture_issued:
+                errors.append("Capture was not issued after normal timer expiry")
+        else:
+            self._not_evaluated.append(
+                "capture: expected a capture after normal timer expiry, but the "
+                "executed region contains no capture edge. Unverified, not passing."
+            )
 
         return errors
 
@@ -1005,16 +1060,35 @@ class Case8OutputPublicationCleanup(LifecycleScenario):
         errors = super()._assertions(contract)
 
         # Output must be published
-        if not self._output_published:
-            errors.append("Output was not published")
+        if self._evaluable("publish_output"):
+            if not self._output_published:
+                errors.append("Output was not published")
+        else:
+            self._not_evaluated.append(
+                "publish_output: expected output publication, but the executed "
+                "region declares no publish_output edge. Unverified, not passing."
+            )
 
         # Completion must be signaled
-        if not self._completion_signaled:
-            errors.append("Completion was not signaled")
+        if self._evaluable("signal_completion"):
+            if not self._completion_signaled:
+                errors.append("Completion was not signaled")
+        else:
+            self._not_evaluated.append(
+                "signal_completion: expected completion signaling, but the "
+                "executed region declares no signal_completion edge. "
+                "Unverified, not passing."
+            )
 
         # Cleanup must be performed
-        if not self._cleanup_performed:
-            errors.append("Cleanup was not performed")
+        if self._evaluable("cleanup"):
+            if not self._cleanup_performed:
+                errors.append("Cleanup was not performed")
+        else:
+            self._not_evaluated.append(
+                "cleanup: expected cleanup after publication, but the executed "
+                "region declares no cleanup edge. Unverified, not passing."
+            )
 
         # Order: publish -> signal -> cleanup
         camera_calls = [c for c in contract.stub_calls if c["stub_name"] == "camera"]
@@ -1064,17 +1138,37 @@ class Case9ManualNonBControl(LifecycleScenario):
     def _assertions(self, contract: ArmEmulationContract) -> List[str]:
         errors = super()._assertions(contract)
 
-        # Manual/non-B dispatch must work
-        if not self._manual_dispatch:
-            errors.append("Manual dispatch was not observed")
+        # Manual/non-B dispatch must work. All three edges are absent from this
+        # region, so without the guard every one of these reports a regression
+        # against an artifact that has no such call site.
+        if self._evaluable("manual_dispatch"):
+            if not self._manual_dispatch:
+                errors.append("Manual dispatch was not observed")
+        else:
+            self._not_evaluated.append(
+                "manual_dispatch: expected Manual/non-B dispatch, but the executed "
+                "region declares no manual_dispatch edge. Unverified, not passing."
+            )
 
-        # Non-B path must be taken
-        if not self._non_b_path:
-            errors.append("Non-B capture path was not taken")
+        if self._evaluable("non_b_capture"):
+            if not self._non_b_path:
+                errors.append("Non-B capture path was not taken")
+        else:
+            self._not_evaluated.append(
+                "non_b_capture: expected the non-B capture path, but the executed "
+                "region declares no non_b_capture edge. Unverified, not passing."
+            )
 
         # Control case must be isolated (not conflated with Pentax-specific behavior)
-        if not self._control_case_isolated:
-            errors.append("Control case shared helper was not invoked")
+        if self._evaluable("shared_helper"):
+            if not self._control_case_isolated:
+                errors.append("Control case shared helper was not invoked")
+        else:
+            self._not_evaluated.append(
+                "shared_helper: expected the control-case shared helper, but the "
+                "executed region declares no shared_helper edge. "
+                "Unverified, not passing."
+            )
 
         return errors
 
