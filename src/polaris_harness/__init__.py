@@ -92,6 +92,7 @@ from .runtime import (
     stop_all as stop_all_runtime_verifiers,
 )
 from .install_simulation import InstallObservation, InstallSimulator, InstallState
+from .issue_forms import validate_pin_request_provenance
 from .ledger import (
     ExecutionLedger,
     LedgerEntry,
@@ -203,6 +204,7 @@ __all__ = [
     "validate_evidence_file",
     "validate_personality_file",
     "validate_runtime_manifest_file",
+    "validate_pin_request_provenance",
     "RuntimeVerifier",
     "RuntimeVerifierManager",
     "get_runtime_verifier_manager",

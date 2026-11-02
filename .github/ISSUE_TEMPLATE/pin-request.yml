@@ -22,10 +22,13 @@ body:
     id: artifact
     attributes:
       label: Artifact provenance (mandatory)
-      value: |
+      description: >
+        Enter both hashes as exactly 64 lowercase hexadecimal characters. Do not
+        submit the field with blank values or the example text unchanged.
+      placeholder: |
         ```
-        region_sha256:
-        source_binary_sha256:
+        region_sha256: REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
+        source_binary_sha256: REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
         patcher_ref:
         source_binary_retained_at:
         ```

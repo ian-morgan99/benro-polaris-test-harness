@@ -29,6 +29,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from polaris_harness.issue_forms import validate_pin_request_provenance
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
 
@@ -194,8 +196,54 @@ def test_pin_request_requires_provenance_hashes():
         "the provenance block must be required: a pin request without hashes "
         "cannot be reproduced, since region binaries are gitignored"
     )
-    value = (artifact.get("attributes") or {}).get("value", "")
+    attributes = artifact.get("attributes") or {}
+    assert "value" not in attributes, (
+        "the provenance block must not pre-populate value: GitHub treats a "
+        "nonempty default as a completed submission"
+    )
+    value = attributes.get("placeholder", "")
     for field in ("region_sha256", "source_binary_sha256"):
         assert re.search(field, value), (
             f"provenance template must ask for {field}"
         )
+
+
+def test_pin_request_placeholder_is_not_a_valid_submission():
+    """The example text must fail the downstream provenance gate."""
+    path = TEMPLATE_DIR / "pin-request.yml"
+    if not path.exists():
+        pytest.skip("pin-request.yml not present")
+    data = yaml.safe_load(path.read_text())
+    artifact = next(
+        block for block in data["body"] if block.get("id") == "artifact"
+    )
+    placeholder = artifact["attributes"]["placeholder"]
+
+    errors = validate_pin_request_provenance(placeholder)
+    assert errors
+
+
+def test_pin_request_provenance_accepts_real_hashes():
+    body = (
+        "region_sha256: " + "a" * 64 + "\n"
+        "source_binary_sha256: " + "b" * 64 + "\n"
+    )
+    assert validate_pin_request_provenance(body) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "region_sha256:\nsource_binary_sha256:\n",
+        "region_sha256: REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS\n"
+        "source_binary_sha256: REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS\n",
+        "region_sha256: " + "a" * 63 + "\n"
+        "source_binary_sha256: " + "b" * 64 + "\n",
+        "region_sha256: " + "A" * 64 + "\n"
+        "source_binary_sha256: " + "b" * 64 + "\n",
+    ],
+)
+def test_pin_request_provenance_rejects_blank_placeholder_or_invalid_hashes(body):
+    errors = validate_pin_request_provenance(body)
+    assert errors
+    assert any("64 lowercase hexadecimal" in error for error in errors)
