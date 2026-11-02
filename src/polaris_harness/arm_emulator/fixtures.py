@@ -26,7 +26,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .emulator import DataRegion, EmulationConfig, MemoryPatch
+from .emulator import (
+    DataRegion,
+    EmulationConfig,
+    EnvironmentFixture,
+    MemoryPatch,
+)
 
 
 @dataclass
@@ -67,6 +72,11 @@ class FixtureMetadata:
     # machine-specific path is committed.
     data_regions: List[Dict[str, Any]] = field(default_factory=list)
     memory_patches: List[Dict[str, Any]] = field(default_factory=list)
+    # Runtime allocations the artifact dereferences that exist in no file, such
+    # as a camera struct malloc'd during startup. Declared separately from
+    # data_regions/memory_patches because seeding them is an assumption about
+    # process state rather than restoration of artifact bytes.
+    environment_fixtures: List[Dict[str, Any]] = field(default_factory=list)
     entry_arguments: List[int] = field(default_factory=list)
 
 
@@ -104,6 +114,7 @@ class FixtureManager:
             boundary_aliases: Dict[str, str] = {}
             data_regions: List[Dict[str, Any]] = []
             memory_patches: List[Dict[str, Any]] = []
+            environment_fixtures: List[Dict[str, Any]] = []
             entry_arguments: List[int] = []
 
             if meta_file.exists():
@@ -138,6 +149,11 @@ class FixtureManager:
                     patches = prov.get("memory_patches", [])
                     if isinstance(patches, list):
                         memory_patches = [p for p in patches if isinstance(p, dict)]
+                    fixtures = prov.get("environment_fixtures", [])
+                    if isinstance(fixtures, list):
+                        environment_fixtures = [
+                            f for f in fixtures if isinstance(f, dict)
+                        ]
                     args = prov.get("entry_arguments", [])
                     if isinstance(args, list):
                         entry_arguments = [
@@ -170,6 +186,7 @@ class FixtureManager:
                 boundary_aliases=boundary_aliases,
                 data_regions=data_regions,
                 memory_patches=memory_patches,
+                environment_fixtures=environment_fixtures,
                 entry_arguments=entry_arguments,
             )
 
@@ -356,11 +373,23 @@ class FixtureManager:
         # extracted window. Done after overrides so an explicit caller can still
         # replace the whole list. Skipped when apply_sidecar_environment is
         # false, which lets a caller deliberately reproduce the unseeded run.
+        #
+        # environment_fixtures are gated by the same flag even though they need
+        # no source binary: "unseeded" means the artifact's runtime assumptions
+        # are absent too, so supplying a malloc'd camera struct under that flag
+        # would contradict what the caller asked for.
         if apply_sidecar_environment:
             if not config.data_regions and fixture.data_regions:
                 config.data_regions = self._build_data_regions(fixture)
             if not config.memory_patches and fixture.memory_patches:
                 config.memory_patches = self._build_memory_patches(fixture)
+            if (
+                not config.environment_fixtures
+                and fixture.environment_fixtures
+            ):
+                config.environment_fixtures = self._build_environment_fixtures(
+                    fixture
+                )
         if not config.entry_arguments and fixture.entry_arguments:
             config.entry_arguments = list(fixture.entry_arguments)
 
@@ -492,6 +521,73 @@ class FixtureManager:
             built.append(MemoryPatch(
                 address=address, source_path=source,
                 source_offset=offset, size=size,
+            ))
+        return built
+
+    def _build_environment_fixtures(
+        self, fixture: FixtureMetadata
+    ) -> List[Any]:
+        """Turn sidecar environment_fixtures into EnvironmentFixture objects.
+
+        pointer_address is required and must name the global holding the object,
+        not the GOT slot pointing at it. Collapsing that indirection would let a
+        fixture satisfy the artifact's first load while bypassing its second,
+        producing coverage of a process that never existed - so a spec without it
+        is rejected rather than guessed at.
+
+        Args:
+            fixture: Fixture declaring the fixtures
+
+        Returns:
+            EnvironmentFixture instances
+
+        Raises:
+            ValueError: If a fixture omits name, size, map_address or
+                pointer_address
+        """
+        built = []
+        for spec in fixture.environment_fixtures:
+            name = spec.get("name")
+            size = self._coerce_int(spec.get("size"))
+            map_address = self._coerce_int(spec.get("map_address"))
+            pointer_address = self._coerce_int(spec.get("pointer_address"))
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    f"fixture {fixture.name} declares an environment fixture "
+                    f"without a name: {spec!r}. The name is recorded in the "
+                    f"contract so a reader can tell seeded runtime state from "
+                    f"restored artifact bytes."
+                )
+            if size is None or map_address is None or pointer_address is None:
+                raise ValueError(
+                    f"fixture {fixture.name} environment fixture {name!r} is "
+                    f"missing size/map_address/pointer_address: {spec!r}. "
+                    f"pointer_address must be the global that holds the object's "
+                    f"address, not the GOT slot pointing at that global."
+                )
+            raw_fields = spec.get("fields", {}) or {}
+            if not isinstance(raw_fields, dict):
+                raise ValueError(
+                    f"fixture {fixture.name} environment fixture {name!r} "
+                    f"fields must be an object, got {type(raw_fields).__name__}."
+                )
+            fields: Dict[int, int] = {}
+            for key, value in raw_fields.items():
+                offset = self._coerce_int(key)
+                coerced = self._coerce_int(value)
+                if offset is None or coerced is None:
+                    raise ValueError(
+                        f"fixture {fixture.name} environment fixture {name!r} "
+                        f"field {key!r}: {value!r} is not an integer."
+                    )
+                fields[offset] = coerced
+            built.append(EnvironmentFixture(
+                name=name.strip(),
+                size=size,
+                map_address=map_address,
+                pointer_address=pointer_address,
+                fields=fields,
+                got_slot=self._coerce_int(spec.get("got_slot")),
             ))
         return built
 

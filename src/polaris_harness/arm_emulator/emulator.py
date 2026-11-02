@@ -111,6 +111,69 @@ class DataRegion:
 
 
 @dataclass
+class EnvironmentFixture:
+    """A runtime allocation the artifact expects but that exists in no file.
+
+    Distinct from DataRegion and MemoryPatch, both of which restore bytes present
+    in the retained binary. This describes memory a live process creates - for
+    example pgphoto's 5408-byte camera struct, allocated by mallocz inside main()
+    - which has no file contents to copy. Keeping it a separate type makes the
+    distinction auditable in the run manifest: seeding real sections is fidelity,
+    supplying runtime state is an assumption, and a reader must be able to tell
+    which produced a result.
+
+    Indirection matters here. Such a global is normally reached twice: a GOT slot
+    holds the address of a .bss global, and that global holds the object's address.
+    Writing the object address into the *GOT slot* bypasses the global entirely,
+    so the artifact's own `ldr rN,[r4,r3]; ldr rN,[rN]` sequence reads something
+    it never would have read, and coverage can look complete while describing a
+    process that never existed. pointer_address is therefore the global, and
+    got_slot - when given - is asserted to still point at that global.
+
+    Attributes:
+        name: Identifier recorded in the contract so the fixture is visible
+        size: Bytes to map for the object
+        map_address: Where to map it; must not collide with an existing mapping
+        pointer_address: Where the object's address is written - the global that
+            holds the pointer, NOT the GOT slot pointing at that global
+        fields: offset -> 32-bit value written into the object before the run
+        got_slot: GOT slot expected to still hold pointer_address after setup
+    """
+
+    name: str
+    size: int
+    map_address: int
+    pointer_address: int
+    fields: Dict[int, int] = field(default_factory=dict)
+    got_slot: Optional[int] = None
+
+    def validate(self) -> None:
+        """Fail closed on an unusable fixture description."""
+        if self.size <= 0:
+            raise ValueError(
+                f"EnvironmentFixture {self.name!r} size {self.size} must be "
+                f"positive."
+            )
+        if self.map_address % PAGE_SIZE != 0:
+            raise ValueError(
+                f"EnvironmentFixture {self.name!r} map_address "
+                f"{hex(self.map_address)} is not {PAGE_SIZE}-byte aligned; "
+                f"Unicorn cannot map it."
+            )
+        for offset, value in self.fields.items():
+            if offset < 0 or offset + 4 > self.size:
+                raise ValueError(
+                    f"EnvironmentFixture {self.name!r} field at offset {offset} "
+                    f"falls outside the {self.size}-byte object."
+                )
+            if not 0 <= value <= 0xFFFFFFFF:
+                raise ValueError(
+                    f"EnvironmentFixture {self.name!r} field at offset {offset} "
+                    f"({value}) is not a 32-bit value."
+                )
+
+
+@dataclass
 class MemoryPatch:
     """Bytes written into an already-mapped range before the run starts.
 
@@ -178,6 +241,11 @@ class EmulationConfig:
     # Bytes copied from the retained source binary into the existing mapping,
     # used to give zero-filled globals their real contents.
     memory_patches: List[MemoryPatch] = field(default_factory=list)
+    # Runtime allocations the artifact dereferences but that exist in no file,
+    # such as a camera struct malloc'd during startup. Seeding these is an
+    # assumption about process state, not restoration of artifact bytes, so each
+    # one is declared explicitly and recorded in the contract.
+    environment_fixtures: List[EnvironmentFixture] = field(default_factory=list)
     # Addresses at which to capture a register snapshot during the run. Used to
     # diagnose where a run diverges, e.g. which pointer a faulting load derived
     # its address from.
@@ -919,17 +987,118 @@ class ARMEmulator:
         # Give zero-filled globals their real contents inside the existing map.
         self._apply_memory_patches()
 
-    def _mapped_ranges(self) -> List[tuple]:
-        """Ranges this emulator has mapped, for patch bounds checks."""
-        return [
+        # Supply runtime allocations the artifact dereferences but that exist in
+        # no file. Runs after patches so a fixture can be verified against the
+        # real GOT contents rather than a zero-filled one.
+        self._setup_environment_fixtures()
+
+    def _mapped_ranges(self, include_fixtures: bool = True) -> List[tuple]:
+        """Ranges this emulator has mapped, for bounds checks.
+
+        Args:
+            include_fixtures: whether environment fixture ranges count. They are
+                mapped after memory patches are applied, so a patch check must
+                exclude them - otherwise a patch could pass its bounds check and
+                then fail writing to memory that is not yet mapped.
+
+        Returns:
+            List of (start, end) exclusive-end ranges
+        """
+        ranges = [
             (self.config.code_address,
              self.config.code_address + self.config.code_size),
             (self.config.stack_address,
              self.config.stack_address + self.config.stack_size),
-        ] + [
+        ]
+        ranges += [
             (region.address, region.address + region.size)
             for region in self.config.data_regions
         ]
+        if include_fixtures:
+            ranges += [
+                (fixture.map_address, fixture.map_address + fixture.size)
+                for fixture in self.config.environment_fixtures
+            ]
+        return ranges
+
+    def _setup_environment_fixtures(self) -> None:
+        """Map declared runtime allocations and wire them through the real global.
+
+        Order of operations is deliberate. The object address goes into
+        pointer_address - the global that holds it - and the GOT slot is then
+        verified to still point at that global. Writing the object address into
+        the GOT slot instead would collapse the artifact's two-step lookup
+        (`ldr rN,[r4,r3]` then `ldr rN,[rN]`) into one, so the code under test
+        would read a pointer it never reads in a live process. Coverage would
+        look complete while describing a process that never existed.
+
+        Raises:
+            ValueError: on overlap with an existing mapping, or when the GOT slot
+                does not resolve to pointer_address, meaning the assumed indirection
+                is wrong and the fixture must be re-derived rather than applied.
+        """
+        mapped_fixtures: List[EnvironmentFixture] = []
+        for fixture in self.config.environment_fixtures:
+            fixture.validate()
+            end = fixture.map_address + fixture.size
+            # Compare against everything mapped so far, including fixtures wired
+            # up earlier in this loop, so two fixtures may not overlap each other.
+            existing = self._mapped_ranges(include_fixtures=False) + [
+                (already.map_address, already.map_address + already.size)
+                for already in mapped_fixtures
+            ]
+            for start, stop in existing:
+                if start == fixture.map_address and stop == end:
+                    continue
+                if fixture.map_address < stop and start < end:
+                    raise ValueError(
+                        f"environment_fixtures[{fixture.name!r}] "
+                        f"[{hex(fixture.map_address)}, {hex(end)}) overlaps an "
+                        f"existing mapping [{hex(start)}, {hex(stop)}). A fixture "
+                        f"that lands on the artifact or the stack produces a run "
+                        f"whose results look plausible but describe an environment "
+                        f"that never existed."
+                    )
+
+            self._uc.mem_map(fixture.map_address, fixture.size)
+            self._uc.mem_write(fixture.map_address, bytes(fixture.size))
+
+            # The object's address belongs in the global that holds it.
+            self._uc.mem_write(
+                fixture.pointer_address,
+                struct.pack("<I", fixture.map_address),
+            )
+            for offset, value in sorted(fixture.fields.items()):
+                self._uc.mem_write(
+                    fixture.map_address + offset, struct.pack("<I", value)
+                )
+
+            if fixture.got_slot is None:
+                continue
+
+            # Negative assertion: the GOT slot must still hold pointer_address.
+            got_value = struct.unpack(
+                "<I", bytes(self._uc.mem_read(fixture.got_slot, 4))
+            )[0]
+            if got_value != fixture.pointer_address:
+                raise ValueError(
+                    f"environment_fixtures[{fixture.name!r}] GOT slot "
+                    f"{hex(fixture.got_slot)} holds {hex(got_value)}, expected "
+                    f"{hex(fixture.pointer_address)}. The assumed "
+                    f"GOT -> global -> object indirection does not match this "
+                    f"artifact; re-derive the fixture instead of forcing it."
+                )
+            # Positive assertion of the full chain the artifact will walk.
+            resolved = struct.unpack(
+                "<I", bytes(self._uc.mem_read(fixture.pointer_address, 4))
+            )[0]
+            if resolved != fixture.map_address:
+                raise ValueError(
+                    f"environment_fixtures[{fixture.name!r}] global "
+                    f"{hex(fixture.pointer_address)} holds {hex(resolved)}, "
+                    f"expected the mapped object at {hex(fixture.map_address)}."
+                )
+            mapped_fixtures.append(fixture)
 
     def _apply_memory_patches(self) -> None:
         """Copy bytes from the retained source binary into mapped memory.
@@ -939,7 +1108,10 @@ class ARMEmulator:
         address would fault, and a patch that straddles a boundary would be
         partially applied and produce a run that looks valid but is not.
         """
-        ranges = self._mapped_ranges()
+        # Fixtures are mapped after this step, so their ranges are excluded:
+        # including them would let a patch pass its bounds check and then fail
+        # writing to memory that is not yet mapped.
+        ranges = self._mapped_ranges(include_fixtures=False)
         for index, patch in enumerate(self.config.memory_patches):
             patch.validate()
             end = patch.address + patch.size

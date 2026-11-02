@@ -318,26 +318,24 @@
     "stub_entries_note": "All 42 BL sites resolved from the retained source ELF: 10 via .symtab FUNC entries and 3 via .rel.plt -> .dynsym (sqrt, textdomain, isatty). model is call-site because the intercepted address is the BL instruction inside the mapped blob; the callee bodies are outside the extracted window. Stub grouping is semantic: camera state/capture calls to 'camera', gp_log to 'libgphoto', HI_LOG_Print/sqrt/textdomain/isatty to 'os', timediff_now/delayTime to 'timer', cb_arg_run to 'callback'.",
     "observed_behaviour": {
       "mode": "arm",
-      "instructions_executed": 275,
-      "result": "memory_fault",
-      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED) [faulting read_unmapped of 0x000000d0]",
-      "fault_address": "0x102090",
-      "stub_calls_recorded": 21,
+      "instructions_executed": 5001,
+      "result": "timeout",
+      "error": "Instruction limit exceeded: 5001 instructions",
+      "fault_address": null,
+      "stub_calls_recorded": 190,
       "stub_calls_seen": {
-        "waitCameraIdle": 1,
-        "numOfCaptureImage": 1,
+        "wait_and_handle_event": 170,
+        "cb_arg_run": 1,
+        "gp_log": 1,
+        "HI_LOG_Print": 1,
+        "sqrt": 1,
+        "textdomain": 1,
         "setCameraStatus": 1,
-        "gp_log": 5,
-        "HI_LOG_Print": 5,
-        "sqrt": 3,
-        "textdomain": 2,
-        "cb_arg_run": 2,
-        "wait_and_handle_event": 1
+        "numOfCaptureImage": 1,
+        "waitCameraIdle": 1
       },
-      "interpretation": "Measured with the committed sidecar config and enable_fpu=True. Enabling the VFP coprocessor (FPEXC.EN) removed the earlier UC_ERR_INSN_INVALID at 0x101bd0 on `vmov.i32 q8,#0`, extending the run from 71 to 275 instructions and from 6 to 21 boundary calls, and reaching wait_and_handle_event - the timer/event path cases 5-6 need. The run now faults at 0x102090 on `ldr r3,[r3,#0xd0]`: the preceding `ldr r3,[r4,r3]` resolves a .got slot (0x2f7564) holding 0x3787dc, the sp_camera symbol in .bss. sp_camera is populated at runtime by camera initialisation, so its file value is zero and the dereference yields 0. That is a runtime-state gap, not a decoding failure: the instruction decodes fine and the memory it addresses was never provided.",
-      "superseded": "Two earlier measurements are superseded. (1) 33 instructions / UC_ERR_WRITE_UNMAPPED at 0x101b38: measured before .got/.data were seeded, and reproduced exactly when POLARIS_FIRMWARE_ROOT is unset. (2) 71 instructions / UC_ERR_INSN_INVALID at 0x101bd0: recorded as a terminal VFP engine limit, but that was a misdiagnosis. Unicorn exposes UC_ARM_REG_FPEXC and setting bit 30 makes the same vmov execute with correct semantics (Q8 becomes 0). The fault was uninitialised CPU state in the harness, not an engine limit. It was also reported as result=unsupported_instruction because every UcError was classified that way; memory faults now report result=memory_fault.",
-      "fault_access_address": "0xd0",
-      "fault_access_type": "read_unmapped"
+      "interpretation": "Measured with the committed sidecar config including environment_fixtures[sp_camera_object]. The 0x102090 fault is gone: seeding the sp_camera pointee clears the gate at `cmp r3,#1`, and execution reaches wait_and_handle_event at 0x101f6c and loops there because the default stub returns 0, which is not -52. Returning -52 from that stub exits the loop after one call and the run completes (267 instructions, 23 calls). So the remaining limit is stub behaviour, not missing memory.",
+      "superseded": "An earlier revision recorded 275 instructions / memory_fault at 0x102090 with .got/.data seeded but no environment fixture. That measurement is retained as observed_behaviour_without_environment_fixture rather than deleted, because the difference between the two is the evidence that the fixture is what clears the gate."
     },
     "source_retention_gap": {
       "status": "RESOLVED",
@@ -365,6 +363,54 @@
         "section": ".data",
         "why": "Initialised data the function reads through the same pointer chains."
       }
-    ]
+    ],
+    "environment_fixtures": [
+      {
+        "name": "sp_camera_object",
+        "size": "0x2000",
+        "map_address": "0x40000000",
+        "pointer_address": "0x3787dc",
+        "got_slot": "0x2f7564",
+        "fields": {
+          "0xd0": 0
+        },
+        "why": "sp_camera is a .bss global holding a pointer to a 5408-byte struct that mallocz allocates inside main() (sp_camera_creat at 0x1817c: `movw r0,#0x1520; bl mallocz`). No file contains that object, so .got/.data seeding alone cannot supply it and the helper faults at 0x102090 on `ldr r3,[r3,#0xd0]`. pointer_address is the GLOBAL at 0x3787dc, deliberately not the GOT slot: the artifact dereferences twice (`ldr r3,[r4,r3]` then `ldr r3,[r3]`), and writing the object address into the GOT slot would collapse that chain and bypass the real global, yielding coverage of a process that never existed. got_slot is asserted unchanged after setup for exactly that reason.",
+        "provenance": "ian-morgan99/benro-polaris-firmware-patcher#258",
+        "size_evidence": "0x18198: movw r0, #0x1520 (=5408) verified with capstone against source_binary_sha256 8973d948..."
+      }
+    ],
+    "environment_fixtures_note": "Runtime allocations the artifact dereferences that exist in no file. Distinct from data_regions/memory_patches, which restore bytes present in the retained binary. Seeding these is an assumption about process state, so assertions must be about pgphoto's behaviour given that state (branch taken, calls made, value returned), never about the state itself.",
+    "observed_behaviour_without_environment_fixture": {
+      "mode": "arm",
+      "instructions_executed": 275,
+      "result": "memory_fault",
+      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED) [faulting read_unmapped of 0x000000d0]",
+      "fault_address": "0x102090",
+      "stub_calls_recorded": 21,
+      "stub_calls_seen": {
+        "waitCameraIdle": 1,
+        "numOfCaptureImage": 1,
+        "setCameraStatus": 1,
+        "gp_log": 5,
+        "HI_LOG_Print": 5,
+        "sqrt": 3,
+        "textdomain": 2,
+        "cb_arg_run": 2,
+        "wait_and_handle_event": 1
+      },
+      "interpretation": "Measured with the committed sidecar config and enable_fpu=True. Enabling the VFP coprocessor (FPEXC.EN) removed the earlier UC_ERR_INSN_INVALID at 0x101bd0 on `vmov.i32 q8,#0`, extending the run from 71 to 275 instructions and from 6 to 21 boundary calls, and reaching wait_and_handle_event - the timer/event path cases 5-6 need. The run now faults at 0x102090 on `ldr r3,[r3,#0xd0]`: the preceding `ldr r3,[r4,r3]` resolves a .got slot (0x2f7564) holding 0x3787dc, the sp_camera symbol in .bss. sp_camera is populated at runtime by camera initialisation, so its file value is zero and the dereference yields 0. That is a runtime-state gap, not a decoding failure: the instruction decodes fine and the memory it addresses was never provided.",
+      "superseded": "Two earlier measurements are superseded. (1) 33 instructions / UC_ERR_WRITE_UNMAPPED at 0x101b38: measured before .got/.data were seeded, and reproduced exactly when POLARIS_FIRMWARE_ROOT is unset. (2) 71 instructions / UC_ERR_INSN_INVALID at 0x101bd0: recorded as a terminal VFP engine limit, but that was a misdiagnosis. Unicorn exposes UC_ARM_REG_FPEXC and setting bit 30 makes the same vmov execute with correct semantics (Q8 becomes 0). The fault was uninitialised CPU state in the harness, not an engine limit. It was also reported as result=unsupported_instruction because every UcError was classified that way; memory faults now report result=memory_fault.",
+      "fault_access_address": "0xd0",
+      "fault_access_type": "read_unmapped",
+      "how_to_reproduce": "Build the config normally (so .got/.data patches apply) then clear config.environment_fixtures before running. This is .got/.data seeded but with no sp_camera pointee, which is what produces the 0x102090 read_unmapped of 0xd0."
+    },
+    "observed_behaviour_fully_unseeded": {
+      "mode": "arm",
+      "instructions_executed": 33,
+      "result": "memory_fault",
+      "error": "Invalid memory write (UC_ERR_WRITE_UNMAPPED) [faulting write_unmapped of 0x00000bc0]",
+      "stub_calls_recorded": 2,
+      "how_to_reproduce": "Pass apply_sidecar_environment=False to FixtureManager.to_emulation_config. That skips the .got/.data patches and the environment fixtures alike, so the first pointer chase faults immediately."
+    }
   }
 }

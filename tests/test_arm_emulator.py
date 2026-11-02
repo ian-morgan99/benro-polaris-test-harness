@@ -457,14 +457,13 @@ class TestFixtureIntegrity:
             pytest.skip("stage2_region.bin not supplied locally")
 
         recorded = fixture.provenance.get("observed_behaviour", {})
-        assert recorded.get("instructions_executed") == 275
-        assert recorded.get("stub_calls_recorded") == 21
-        assert recorded.get("fault_address") == "0x102090"
-        # A load through an unpopulated runtime pointer is an environment gap, not
-        # a decoding failure. Recording it as unsupported_instruction is what made
-        # the earlier VFP fault look like a hard engine limit.
-        assert recorded.get("result") == "memory_fault", (
-            f"memory faults must be recorded as memory_fault, got "
+        assert recorded.get("instructions_executed") == 5001
+        assert recorded.get("stub_calls_recorded") == 190
+        # Seeding the sp_camera pointee clears the 0x102090 fault, so the default
+        # run now reaches wait_and_handle_event and loops there until the
+        # instruction limit. That is a stub-behaviour limit, not missing memory.
+        assert recorded.get("result") == "timeout", (
+            f"the seeded default run should reach the event loop, got "
             f"{recorded.get('result')}"
         )
         assert "superseded" in recorded, (
@@ -498,6 +497,65 @@ class TestFixtureIntegrity:
 
         assert result.instructions_executed == recorded["instructions_executed"]
         assert len(result.stub_calls) == recorded["stub_calls_recorded"]
+
+    def test_sp_camera_fixture_is_what_clears_the_gate(self):
+        """The sp_camera fixture must be what removes the 0x102090 fault.
+
+        The sidecar documents three measurements, but prose alone does not stop a
+        future change from silently dropping the fixture and reintroducing the
+        fault while the recorded numbers still look right. Running both ways here
+        pins the causal claim: seeded reaches the event loop, unseeded faults on
+        the load through the zero sp_camera global.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("stage2_region")
+        if fixture is None:
+            pytest.skip("stage2_region.bin not supplied locally")
+        available, reason = manager.source_binary_available("stage2_region")
+        if not available:
+            pytest.skip(reason)
+
+        unseeded = fixture.provenance.get(
+            "observed_behaviour_without_environment_fixture", {}
+        )
+        assert unseeded.get("fault_address") == "0x102090"
+
+        def run(with_fixture: bool):
+            config = manager.to_emulation_config(
+                "stage2_region",
+                patcher_commit="f344e41",
+                harness_revision="0.1.0",
+                emulator_version="unicorn-2.1.4",
+                stub_profile="lifecycle",
+                command="capture_image_with_Bulb",
+            )
+            if not with_fixture:
+                config.environment_fixtures = []
+            emulator = ARMEmulator(config)
+            emulator.apply_stub_profile(create_default_profile())
+            for entry in fixture.stub_entries:
+                emulator.register_stub_entry(
+                    entry["stub_name"], int(entry["address"], 0),
+                    function_name=entry["function_name"],
+                    model=entry.get("model", "call-site"))
+            return emulator.run()
+
+        without = run(with_fixture=False)
+        assert without.result.value == "memory_fault"
+        assert "0x000000d0" in (without.error_message or ""), (
+            f"expected the fault to be a read of offset 0xd0 through the zero "
+            f"sp_camera global, got {without.error_message}"
+        )
+
+        with_fixture = run(with_fixture=True)
+        assert with_fixture.result.value != "memory_fault", (
+            f"the sp_camera fixture must clear the fault, got "
+            f"{with_fixture.error_message}"
+        )
+        seen = {c.function_name for c in with_fixture.stub_calls}
+        assert "wait_and_handle_event" in seen, (
+            f"clearing the gate must reach the event loop, saw {sorted(seen)}"
+        )
 
     def test_stub_call_fixture_exists(self):
         """Stub-call fixture binary must exist."""
