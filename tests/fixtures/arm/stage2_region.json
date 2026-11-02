@@ -411,6 +411,8 @@
       "error": "Invalid memory write (UC_ERR_WRITE_UNMAPPED) [faulting write_unmapped of 0x00000bc0]",
       "stub_calls_recorded": 2,
       "how_to_reproduce": "Pass apply_sidecar_environment=False to FixtureManager.to_emulation_config. That skips the .got/.data patches and the environment fixtures alike, so the first pointer chase faults immediately."
-    }
+    },
+    "build_lineage": "main",
+    "build_lineage_note": "6.0.0.54.90 came from the main build. The Astro candidate 6.0.0.54.91 is a different build line with a different pgphoto.stage2ondisk at the same size, so this fixture is retained as the regression reference and is not a stand-in for the Astro candidate."
   }
 }

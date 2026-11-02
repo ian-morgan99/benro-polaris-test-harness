@@ -36,15 +36,26 @@ from .emulator import (
 
 @dataclass
 class FixtureMetadata:
-    """Metadata for an ARM fixture binary."""
+    """Metadata for an ARM fixture binary.
+
+    ``path`` is None when the sidecar records a pinned artifact whose bytes are
+    not present locally. Such a fixture is still discovered, because issue #18
+    asks for the hash and a retrieval procedure to be recorded and stated
+    explicitly - a loader that only sees .bin files cannot report on a missing
+    one, and "not discovered" reads identically to "does not exist".
+    """
 
     name: str
-    path: Path
+    path: Optional[Path]
     sha256: str
     size_bytes: int
     description: str
     source_issue: Optional[str] = None
     provenance: Dict[str, Any] = field(default_factory=dict)
+    # Populated when the artifact is pinned but not obtainable here. Carries the
+    # reason and the retrieval procedure so a SKIP names what to fetch rather
+    # than just saying the file is absent.
+    blocked_reason: Optional[str] = None
 
     # Execution parameters declared by the sidecar. These are required to run a
     # real extracted region correctly: an ARM region decoded as Thumb faults on
@@ -89,17 +100,27 @@ class FixtureManager:
         self._discover_fixtures()
 
     def _discover_fixtures(self) -> None:
-        """Discover all fixture binaries in the fixtures directory."""
+        """Discover all fixture binaries in the fixtures directory.
+
+        A sidecar with no matching .bin is registered as blocked rather than
+        skipped, provided it records provenance. Skipping it would make a pinned
+        candidate indistinguishable from one that was never declared, which is
+        how a stale fixture silently stops being tested.
+        """
         if not self.fixtures_dir.exists():
             return
 
-        for bin_file in self.fixtures_dir.glob("*.bin"):
-            name = bin_file.stem
-            sha256 = self._compute_sha256(bin_file)
-            size = bin_file.stat().st_size
+        names = {f.stem for f in self.fixtures_dir.glob("*.bin")}
+        names |= {f.stem for f in self.fixtures_dir.glob("*.json")}
+
+        for name in sorted(names):
+            bin_file = self.fixtures_dir / f"{name}.bin"
+            meta_file = self.fixtures_dir / f"{name}.json"
+            present = bin_file.exists()
+            sha256 = self._compute_sha256(bin_file) if present else ""
+            size = bin_file.stat().st_size if present else 0
 
             # Look for a sidecar metadata JSON file
-            meta_file = bin_file.with_suffix(".json")
             description = ""
             source_issue = None
             provenance = {}
@@ -167,9 +188,29 @@ class FixtureManager:
                 except (json.JSONDecodeError, OSError):
                     pass
 
+            if not present:
+                # A sidecar with no bytes is only a fixture if it actually pins
+                # something. Without provenance there is nothing to retrieve, so
+                # it is not registered rather than being reported as blocked.
+                if not provenance:
+                    continue
+                procedure = prov.get("retrieval_procedure") or []
+                steps = " ".join(
+                    str(s) for s in procedure
+                ) if isinstance(procedure, list) else str(procedure)
+                default_reason = (
+                    "artifact bytes not present locally"
+                )
+                reason = prov.get("blocked_reason") or default_reason
+                blocked_reason = (
+                    f"{reason} Retrieval: {steps}" if steps else reason
+                )
+            else:
+                blocked_reason = None
+
             self._fixtures[name] = FixtureMetadata(
                 name=name,
-                path=bin_file,
+                path=bin_file if present else None,
                 sha256=sha256,
                 size_bytes=size,
                 description=description,
@@ -188,6 +229,7 @@ class FixtureManager:
                 memory_patches=memory_patches,
                 environment_fixtures=environment_fixtures,
                 entry_arguments=entry_arguments,
+                blocked_reason=blocked_reason,
             )
 
     @staticmethod
@@ -312,6 +354,16 @@ class FixtureManager:
         fixture = self.get_fixture(fixture_name)
         if fixture is None:
             raise ValueError(f"Fixture not found: {fixture_name}")
+
+        # A pinned artifact whose bytes are not here cannot be executed, and
+        # building a config with path=None would either fail later with an
+        # opaque error or run against nothing. Refuse with the retrieval
+        # procedure attached so the caller can act on it.
+        if fixture.path is None:
+            raise ValueError(
+                f"Fixture {fixture_name} is pinned but its bytes are not "
+                f"available locally. {fixture.blocked_reason or ''}".strip()
+            )
 
         # Fail closed on a hash mismatch (issue #18). The digest recorded in the
         # sidecar is the contract; recomputing here rather than trusting the
@@ -606,6 +658,11 @@ class FixtureManager:
         fixture = self.get_fixture(name)
         if fixture is None:
             raise ValueError(f"Fixture not found: {name}")
+        if fixture.path is None:
+            raise ValueError(
+                f"Fixture {name} is pinned but its bytes are not available "
+                f"locally. {fixture.blocked_reason or ''}".strip()
+            )
 
         with open(fixture.path, "rb") as f:
             return f.read()

@@ -278,7 +278,7 @@ class LifecycleScenario:
         if not self.preferred_fixture or self.preferred_fixture == self.fixture_name:
             return self.fixture_name
         candidate = self.fixture_manager.get_fixture(self.preferred_fixture)
-        if candidate is None or not candidate.path.exists():
+        if candidate is None or candidate.path is None or not candidate.path.exists():
             return self.fixture_name
         declared = {e.get("function_name") for e in candidate.stub_entries}
         aliases = candidate.boundary_aliases
@@ -461,17 +461,24 @@ class LifecycleScenario:
         # must not be committed to GitHub — it is extracted read-only from
         # pgphoto.stage2ondisk in the private research repo).
         fixture = self.fixture_manager.get_fixture(self.fixture_name)
-        if fixture is None or not fixture.path.exists():
+        if fixture is None or fixture.path is None or not fixture.path.exists():
+            detail = (
+                fixture.blocked_reason
+                if fixture is not None and fixture.blocked_reason
+                else (
+                    f"extract the region recorded in "
+                    f"tests/fixtures/arm/{self.fixture_name}.json from the "
+                    "private research repo and place the bytes at "
+                    f"tests/fixtures/arm/{self.fixture_name}.bin"
+                )
+            )
             return LifecycleTestResult(
                 case=self.case,
                 passed=False,
                 skipped=True,
                 skip_reason=(
                     f"fixture binary not available locally: {self.fixture_name}; "
-                    "extract the region recorded in "
-                    f"tests/fixtures/arm/{self.fixture_name}.json from the "
-                    "private research repo and place the bytes at "
-                    f"tests/fixtures/arm/{self.fixture_name}.bin"
+                    f"{detail}"
                 ),
             )
         self._active_fixture = fixture

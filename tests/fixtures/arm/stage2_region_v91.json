@@ -1,0 +1,37 @@
+{
+  "name": "stage2_region_v91",
+  "description": "capture_image_with_Bulb region from candidate 6.0.0.54.91 (astro-v1-camera-baseline-20261101). This is an ASTRO build: the FwPkt reuses the shared camera baseline, but the packet was produced by the Astro build line, not the main build that produced 6.0.0.54.90. Pinned so a lifecycle run is bound to this candidate's exact bytes rather than silently falling back to the v90 fixture.",
+  "source_issue": "benro-polaris-test-harness#18; candidate from benro-polaris-firmware-patcher b298b601a",
+  "provenance": {
+    "mode": "arm",
+    "entry_address": "0x101aac",
+    "code_size": 2605056,
+    "max_instructions": 5001,
+    "region_sha256": null,
+    "source_binary_name": "pgphoto.stage2ondisk",
+    "source_binary_sha256": "b4a51cb7240a2fe03b0c59b73757295822d65fc037df78cb62b8180e384b28e4",
+    "source_binary_size": 7801576,
+    "candidate": "astro-v1-camera-baseline-20261101",
+    "display_firmware_version": "6.0.0.54.91",
+    "fwpkt_sha256": "7c11f9a033b2372f1215aca89e3f6ac46544047f26802fe94a68b77217be01d2",
+    "patcher_commit": "6825029c9803c243dcfbe721e4cbea3b531da8dd",
+    "candidate_record_commit": "b298b601a",
+    "libgphoto2_commit": "051d224dbd33fda67ff65ce73a6d6bbd9c9a3aff",
+    "install_manifest_path": "/app/lib/stage2/pgphoto.stage2ondisk",
+    "region_extraction_coordinates": "file_offset = symbol_vaddr + text_file_offset - text_vaddr; symbol capture_image_with_Bulb vaddr 0x101aac, size 2176. text vaddr/offset must be read from THIS ELF's section table, not copied from v90: the two binaries differ and a stale offset would extract the wrong bytes while still producing a loadable blob.",
+    "retrieval_procedure": [
+      "1. git -C <PrivateResearch> show b298b601a:firmware-packets/6.0.0.54.91--astro-v1-camera-baseline-20261101/FwPkt.zip > FwPkt.zip",
+      "2. sha256sum FwPkt.zip  -> must equal fwpkt_sha256 above (verified 2026-11-02)",
+      "3. unzip -o FwPkt.zip 'FwPkt/camera/appfs.ubifs'",
+      "4. Extract /app/lib/stage2/pgphoto.stage2ondisk from appfs.ubifs with a UBIFS reader (ubireader or equivalent). The image is UBI version 1 with compressed payload; there is no plaintext ELF to carve, so carving cannot substitute for a real reader.",
+      "5. sha256sum pgphoto.stage2ondisk -> must equal source_binary_sha256 above",
+      "6. Derive the region from THIS ELF's .text section table and record region_sha256 here."
+    ],
+    "blocked_reason": "Not extractable on this host as of 2026-11-02: no UBIFS reader is installed (ubireader/ubidump/jefferson/binwalk absent) and the environment has no network access to install one. The exact missing input is /app/lib/stage2/pgphoto.stage2ondisk with SHA-256 b4a51cb7...b28e4, inside FwPkt/camera/appfs.ubifs of the candidate zip. This is a tooling gap, not a claim that runtime-derived fixture state is impermissible.",
+    "status": "pinned, artifact not yet obtained",
+    "build_lineage": "astro",
+    "build_lineage_note": "6.0.0.54.90 came from the main build; 6.0.0.54.91 came from an Astro build. Both are published to the PrivateResearch repo under firmware-packets/. They are not interchangeable: their pgphoto.stage2ondisk differ (8973d948... vs b4a51cb7...) at identical size, so a result measured on one does not transfer to the other.",
+    "acceptance_status": "candidate, not accepted. The packet README requires that the standard camera owner accept the baseline and that patcher issue #251 be closed or explicitly waived before install. Neither has happened, so nothing measured against this artifact qualifies it for deployment.",
+    "retained_at": "PrivateResearch firmware-packets/6.0.0.54.91--astro-v1-camera-baseline-20261101/ (tracked in the PrivateResearch git repo; commit b298b601a records it)"
+  }
+}

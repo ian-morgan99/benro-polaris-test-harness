@@ -241,6 +241,35 @@ profile, and command. It also needs a `stage2_region.json` sidecar declaring
 call - see [Fixture execution metadata](#fixture-execution-metadata). Without
 those the region is decoded as Thumb and faults immediately.
 
+### Two pinned regions, two build lines
+
+Both candidates live in the PrivateResearch repo under `firmware-packets/` when
+published, and both are pinned by a committed sidecar carrying coordinates and
+hashes only - never the bytes.
+
+| fixture | firmware | build line | pgphoto.stage2ondisk |
+|---|---|---|---|
+| `stage2_region` | 6.0.0.54.90 | **main** | `8973d948…c8d9eaac` |
+| `stage2_region_v91` | 6.0.0.54.91 | **astro** | `b4a51cb7…384b28e4` |
+
+They are **not interchangeable**. The two `pgphoto.stage2ondisk` files differ at
+identical size (7,801,576 bytes), so a measurement taken on one does not transfer
+to the other. `stage2_region` is retained as the main-build regression reference,
+not as a stand-in for the Astro candidate.
+
+The Astro candidate is **not accepted**. Its packet README requires that the
+standard camera owner accept the shared baseline and that patcher issue #251 be
+closed or explicitly waived before install; neither has happened. Nothing measured
+against it qualifies it for deployment, and no emulator result qualifies any
+candidate.
+
+`stage2_region_v91` is currently pinned but its bytes are not obtainable here: the
+candidate ships `pgphoto.stage2ondisk` inside `FwPkt/camera/appfs.ubifs`, a UBI
+image with compressed payload, and no UBIFS reader is installed. The sidecar names
+the exact missing path (`/app/lib/stage2/pgphoto.stage2ondisk`), its hash, and the
+retrieval procedure. Discovery reports it as blocked rather than absent, so the
+lifecycle suite skips it with that reason instead of silently testing nothing.
+
 ## Fixture execution metadata
 
 A fixture's sidecar `*.json` may declare the parameters needed to execute it.
@@ -346,18 +375,51 @@ establishing entry state.
 
 With the FPU enabled and `.got`/`.data` seeded from the retained binary,
 `capture_image_with_Bulb` executes **275 instructions** and reaches **21 real
-boundary calls**, including `wait_and_handle_event` — the timer/event path cases
-5-6 need. It then faults at `0x102090` on `ldr r3,[r3,#0xd0]`: the preceding load
-resolves `.got` slot `0x2f7564`, which holds `0x3787dc`, the `sp_camera` symbol in
-`.bss`. `sp_camera` is populated by runtime camera initialisation, so its file
-value is zero and the dereference yields `0xd0`. Cases 5-9 assert timer
-cancellation/expiry, callback ordering, output publication and manual dispatch,
-none of which are reachable until that structure exists.
+boundary calls**, including `wait_and_handle_event`. It then faults at `0x102090`
+on `ldr r3,[r3,#0xd0]`: the preceding load resolves `.got` slot `0x2f7564`, which
+holds `0x3787dc`, the `sp_camera` symbol in `.bss`. `sp_camera` is populated by
+runtime camera initialisation, so its file value is zero and the dereference yields
+`0xd0`.
+
+That fault is cleared. `sp_camera`'s pointee is a runtime allocation that exists in
+no file, so it cannot be restored the way `.got`/`.data` can; it is supplied by an
+`EnvironmentFixture`, which is deliberately a different type from `DataRegion` and
+`MemoryPatch`. Seeding it takes execution past the gate at `0x102088` into the event
+loop at `0x101f6c`, reaching 5001 instructions (the instruction limit) with 190
+boundary calls instead of faulting at 275. Both measurements are retained in the
+fixture sidecar, because the difference between them is the evidence that the
+fixture is what clears the gate.
+
+### What counts as legitimate emulator state
+
+A source-derived, documented runtime fixture is legitimate emulator state. An
+arbitrary value chosen to make an assertion pass is not. The distinction is not
+"restored versus synthesised" — it is whether the value follows from evidence and
+whether the run says so.
+
+- `DataRegion` and `MemoryPatch` restore bytes that exist in the retained binary.
+  They are restoration of artifact content.
+- `EnvironmentFixture` supplies a runtime allocation. It is an assumption about
+  process state, recorded separately so a reader of the run manifest can tell
+  restored evidence from a seeded assumption.
+- The size and shape come from the artifact itself: `sp_camera_creat` at `0x1817c`
+  allocates via `movw r0,#0x1520; bl mallocz`, so the object is 5408 bytes. The
+  address is written to the `.bss` global `0x3787dc`, **not** to the `.got` slot
+  `0x2f7564`. Writing the GOT slot would collapse the artifact's two-step lookup
+  (`GOT slot -> .bss global -> heap object`) and bypass the real global, producing
+  path coverage of a process that never existed. Setup asserts the GOT slot is
+  unchanged and resolves the full chain before the run starts.
+- Field values are limited to what is evidenced. Only `+0xd0` is set, because that
+  is the offset the gate reads. The rest of `_gp_camera`'s layout is not guessed.
+
+What remains impermissible is picking a value because it makes a test green. When
+the field or layout needed is unknown, name the exact missing field and leave the
+case PARTIAL.
 
 That gap is owned by the patcher repo per `OWNERSHIP-AND-ISOLATION.md` and is
-filed as **patcher issue #258**. Seeding a synthetic `sp_camera` would fabricate
-firmware state and let assertions pass against bytes that never existed, so the
-harness does not work around it.
+filed as **patcher issue #258**. It has since been closed in the harness: the
+pointee is supplied by an `EnvironmentFixture` derived from the artifact's own
+allocation sequence, described above.
 
 ### Blockers to qualifying #251, with evidence
 
@@ -373,7 +435,6 @@ entry. The dereference yields `0xd0`. Populated by runtime camera initialisation
 edge is real: disassembling the function resolves `gp_port_close` as a direct BL
 target. Pinning must start at **`0x278e0`**, not the symbol address `0x278d4`, which
 is an 8-byte hook trampoline:
-
 ```armasm
 0x278d4: ldr ip, [pc]     ; ip = word at 0x278dc = 0x30000014
 0x278d8: ldr pc, [ip]     ; jumps through an address in neither PT_LOAD
@@ -401,11 +462,38 @@ layout silently takes a different branch and produces a **green test asserting
 something false**. PARTIAL reports "unverified", which is strictly better than a
 fixture that reports "verified" wrongly.
 
+**`gp_camera_exit`/`gp_port_close` is not the Bulb shutter-close operation.** It is
+libgphoto2's camera teardown and port shutdown. Observing it says the session was
+torn down; it says nothing about whether a physical shutter closed. A close edge in
+an emulator trace must never be reported as shutter closure, and no emulator result
+qualifies deployment. The Bulb stop path is `stopCaptureImageForMessage`, which is a
+different call site with different semantics.
+
 **3. The cancel mechanism is unidentified (cases 1-3, cancel edge).** All 26 callers
-of `gp_context_cancel` are `gp_filesystem_*` or folder helpers — none sits on a
-capture lifecycle path. So the cancellation #251 describes may not be implemented via
-`gp_context_cancel` in this binary at all. Pinning a caller would assert on a
-mechanism unrelated to the defect under test.
+of `gp_context_cancel` inside `pgphoto.stage2ondisk` are `gp_filesystem_*` or folder
+helpers — none sits on a capture lifecycle path.
+
+That scan covers only the pinned binary and **cannot establish that the mechanism is
+absent**. Camera drivers are loaded dynamically, so code outside this ELF can invoke
+the same function. Verified directly: a `ptp2.so` from a firmware tree on this host
+(`openpolaris-research/BenroPolarisPatcher/out/k1ii-k3iii-fixed/stage2-ondisk/`
+`libgphoto2/2.5.34/ptp2.so`, 877,348 bytes, SHA-256 `bdc91554c38d0e59…`) lists
+`gp_context_cancel` in its dynamic symbol table as an **undefined (imported)**
+symbol, resolved at load time against the host binary. A camlib therefore does call
+it, and a pgphoto-only caller scan is not sufficient evidence either way.
+
+Provenance caveat: that copy is **not** the candidate's camlib. The candidate
+manifest records `ptp2.so` as 1,198,944 bytes with SHA-256
+`1c98e162504021b4…`, and no copy on this host matches it. So the finding establishes
+that dynamically loaded drivers import and call `gp_context_cancel` — which is what
+makes a pgphoto-only scan insufficient — but it says nothing specific about the
+candidate's build. Confirming that requires extracting the candidate's own camlibs,
+which is blocked by the same missing UBIFS reader.
+
+The correct conclusion is narrower than the earlier one: within `pgphoto` no caller
+sits on a capture lifecycle path, and the dynamically loaded paths have not been
+analysed for this candidate. Pinning a filesystem-helper caller would still assert on
+a mechanism unrelated to the defect under test, so the case stays PARTIAL.
 
 The harness deliberately does not guess at any of these. Each is recorded as
 not-evaluated so the gap stays visible.

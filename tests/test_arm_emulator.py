@@ -1394,6 +1394,43 @@ class TestAbiShapeMarshaling:
             f"Expected an unmapped-memory reason, got {result.error_message!r}"
         )
 
+    def test_arg_count_six_records_six_arguments(self):
+        """#22 acceptance: arg_count=6 yields six arguments, last two from stack.
+
+        Only the negative case (unreadable stack words fail closed) was covered,
+        so a marshalling change that quietly ignored arg_count and recorded four
+        arguments would still have left this suite green. The emulator spills
+        arguments past R3 onto the stack with SP pointing at the first of them,
+        which is what an AAPCS callee reads.
+        """
+        profile = StubProfile(
+            name="abi6",
+            camera_stub=lambda fn, a, r: 0,
+            abi_shape={"camera": {"arg_count": 6, "pointer_args": [],
+                                  "deref_bytes": {}}},
+        )
+        config = self._config()
+        config.entry_arguments = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]
+        emulator = ARMEmulator(config)
+        emulator.apply_stub_profile(profile)
+        emulator.register_stub_entry("camera", 0x1008, function_name="stop")
+        result = emulator.run()
+
+        assert result.result == EmulationResult.PASS, (
+            f"expected a clean run, got {result.result}: {result.error_message}"
+        )
+        calls = [c for c in result.stub_calls if c.function_name == "stop"]
+        assert len(calls) == 1, f"expected one stop call, got {len(calls)}"
+        args = calls[0].arguments
+        assert len(args) == 6, (
+            f"arg_count=6 must record six arguments, got {len(args)}: {args}"
+        )
+        # The last two come from SP+0 and SP+4, not from registers.
+        assert args[4:] == [0x55, 0x66], (
+            f"stack arguments must be read in ascending address order "
+            f"(arg5 at SP, arg6 at SP+4), got {args[4:]}"
+        )
+
     def test_pointer_argument_dereferenced(self):
         """A declared pointer argument must be read from emulated memory."""
         import struct
@@ -2611,3 +2648,130 @@ class TestSidecarAddressCoercion:
             stub_profile="default", command="cmd",
         )
         assert config.entry_address == 0x1000
+
+
+class TestBlockedFixtureVisibility:
+    """A pinned artifact whose bytes are absent must be visible, not invisible.
+
+    Issue #18 asks for the hash plus a retrieval procedure to be recorded and
+    stated explicitly. Discovery keyed on .bin alone cannot state anything about
+    a missing blob, and "not discovered" is indistinguishable from "never
+    declared" - which is how a pinned candidate silently stops being tested.
+    """
+
+    def _write_sidecar(self, dir_path, name, provenance):
+        import json
+        (dir_path / f"{name}.json").write_text(json.dumps({
+            "name": name,
+            "description": "pinned but not obtained",
+            "provenance": provenance,
+        }))
+
+    def test_sidecar_without_bytes_is_discovered_as_blocked(self, tmp_path):
+        """A sidecar recording provenance with no .bin registers as blocked."""
+        self._write_sidecar(tmp_path, "pinned_region", {
+            "mode": "arm",
+            "source_binary_sha256": "a" * 64,
+            "blocked_reason": "no UBIFS reader installed",
+            "retrieval_procedure": ["unzip FwPkt.zip", "extract pgphoto"],
+        })
+        manager = FixtureManager(tmp_path)
+        fixture = manager.get_fixture("pinned_region")
+        assert fixture is not None, (
+            "a pinned artifact with no bytes must still be discovered"
+        )
+        assert fixture.path is None
+        assert "no UBIFS reader installed" in (fixture.blocked_reason or "")
+        # The retrieval procedure travels with the reason so a SKIP is actionable.
+        assert "unzip FwPkt.zip" in (fixture.blocked_reason or "")
+
+    def test_sidecar_without_provenance_is_not_registered(self, tmp_path):
+        """A stray .json that pins nothing is not presented as a fixture."""
+        self._write_sidecar(tmp_path, "stray", {})
+        manager = FixtureManager(tmp_path)
+        assert manager.get_fixture("stray") is None
+
+    def test_blocked_fixture_refuses_config_construction(self, tmp_path):
+        """Building a config for absent bytes must fail closed, not yield None."""
+        self._write_sidecar(tmp_path, "pinned_region", {
+            "mode": "arm",
+            "blocked_reason": "artifact bytes not present locally",
+        })
+        manager = FixtureManager(tmp_path)
+        with pytest.raises(ValueError, match="pinned but its bytes"):
+            manager.to_emulation_config(
+                "pinned_region", patcher_commit="c", harness_revision="h",
+                emulator_version="e", stub_profile="default", command="cmd",
+            )
+
+    def test_blocked_fixture_refuses_binary_read(self, tmp_path):
+        """read_binary must not attempt to open a path that does not exist."""
+        self._write_sidecar(tmp_path, "pinned_region", {
+            "mode": "arm", "blocked_reason": "not obtained",
+        })
+        manager = FixtureManager(tmp_path)
+        with pytest.raises(ValueError, match="pinned but its bytes"):
+            manager.read_binary("pinned_region")
+
+    def test_present_fixture_still_has_a_path(self, tmp_path):
+        """The normal path is unchanged: a .bin still resolves to its location."""
+        (tmp_path / "ok.bin").write_bytes(b"\x00\x00")
+        manager = FixtureManager(tmp_path)
+        fixture = manager.get_fixture("ok")
+        assert fixture is not None
+        assert fixture.path == tmp_path / "ok.bin"
+        assert fixture.blocked_reason is None
+
+    def test_v91_candidate_is_pinned_and_names_the_missing_input(self):
+        """The Astro candidate is pinned with its exact missing path.
+
+        6.0.0.54.90 came from the main build and 6.0.0.54.91 from an Astro build;
+        both are published to the PrivateResearch repo. They are different builds,
+        so a result measured on one does not transfer to the other. The hashes here
+        are the contract binding a future run to the Astro candidate rather than
+        silently falling back to v90, and the blocked_reason must name the specific
+        file to retrieve rather than declaring runtime-derived state impermissible.
+        """
+        manager = FixtureManager(FIXTURES_DIR)
+        fixture = manager.get_fixture("stage2_region_v91")
+        if fixture is None:
+            pytest.skip("stage2_region_v91.json not present")
+
+        prov = fixture.provenance
+        assert prov["source_binary_sha256"] == (
+            "b4a51cb7240a2fe03b0c59b73757295822d65fc037df78cb62b8180e384b28e4"
+        )
+        assert prov["display_firmware_version"] == "6.0.0.54.91"
+        assert prov["fwpkt_sha256"] == (
+            "7c11f9a033b2372f1215aca89e3f6ac46544047f26802fe94a68b77217be01d2"
+        )
+        assert prov["mode"] == "arm", "an ARM region must not default to Thumb"
+        # entry_address is coerced on the metadata, which is what
+        # to_emulation_config consumes; the raw provenance keeps the hex string.
+        assert fixture.entry_address == 0x101AAC
+
+        # Lineage and acceptance are recorded, not implied by the version number.
+        assert prov["build_lineage"] == "astro"
+        assert prov["acceptance_status"].startswith("candidate, not accepted")
+
+        # The blocker is a tooling gap naming one file, not a blanket prohibition.
+        reason = fixture.blocked_reason or ""
+        assert "/app/lib/stage2/pgphoto.stage2ondisk" in reason, (
+            f"blocked_reason must name the exact missing artifact, got {reason!r}"
+        )
+        assert "retrieval" in reason.lower()
+
+    def test_v90_fixture_remains_the_regression_reference(self):
+        """Retaining v90 is deliberate: it is the main-build reference the Astro
+        candidate is compared against, not a fixture superseded and left to rot."""
+        manager = FixtureManager(FIXTURES_DIR)
+        v90 = manager.get_fixture("stage2_region")
+        if v90 is None or v90.path is None or not v90.path.exists():
+            pytest.skip("stage2_region.bin not supplied locally")
+        assert v90.provenance["source_binary_sha256"] == (
+            "8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac"
+        )
+        assert v90.sha256 == (
+            "23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3"
+        )
+        assert v90.provenance["build_lineage"] == "main"
