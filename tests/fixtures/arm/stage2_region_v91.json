@@ -27,11 +27,12 @@
       "5. sha256sum pgphoto.stage2ondisk -> must equal source_binary_sha256 above",
       "6. Derive the region from THIS ELF's .text section table and record region_sha256 here."
     ],
-    "blocked_reason": "Not extractable on this host as of 2026-11-02: no UBIFS reader is installed (ubireader/ubidump/jefferson/binwalk absent) and the environment has no network access to install one. The exact missing input is /app/lib/stage2/pgphoto.stage2ondisk with SHA-256 b4a51cb7...b28e4, inside FwPkt/camera/appfs.ubifs of the candidate zip. This is a tooling gap, not a claim that runtime-derived fixture state is impermissible.",
+    "blocked_reason": "Not extractable on this host as of 2026-11-02: no UBIFS reader is installed (ubireader, ubidump, jefferson, binwalk, unsquashfs all absent) and the package is not obtainable from PyPI under the name 'ubireader' (HTTP 404 on pypi.org/pypi/ubireader/json; pypi.org itself is reachable, HTTP 200). The exact missing input is /app/lib/stage2/pgphoto.stage2ondisk with SHA-256 b4a51cb7...b28e4, inside FwPkt/camera/appfs.ubifs of the candidate zip. This is a tooling gap, not a claim that runtime-derived fixture state is impermissible.",
     "status": "pinned, artifact not yet obtained",
     "build_lineage": "astro",
     "build_lineage_note": "6.0.0.54.90 came from the main build; 6.0.0.54.91 came from an Astro build. Both are published to the PrivateResearch repo under firmware-packets/. They are not interchangeable: their pgphoto.stage2ondisk differ (8973d948... vs b4a51cb7...) at identical size, so a result measured on one does not transfer to the other.",
     "acceptance_status": "candidate, not accepted. The packet README requires that the standard camera owner accept the baseline and that patcher issue #251 be closed or explicitly waived before install. Neither has happened, so nothing measured against this artifact qualifies it for deployment.",
-    "retained_at": "PrivateResearch firmware-packets/6.0.0.54.91--astro-v1-camera-baseline-20261101/ (tracked in the PrivateResearch git repo; commit b298b601a records it)"
+    "retained_at": "PrivateResearch firmware-packets/6.0.0.54.91--astro-v1-camera-baseline-20261101/ (tracked in the PrivateResearch git repo; commit b298b601a records it)",
+    "blocked_reason_correction": "An earlier revision of this field said 'no network access to install one'. That was wrong and has been replaced: pypi.org/pypi/requests/json returns 200 and github.com returns 200 from this host. The actual blocker is that no UBIFS reader is installed and ubireader is not published on PyPI under that name, so obtaining one means vendoring third-party code, which needs the repository owner's approval."
   }
 }

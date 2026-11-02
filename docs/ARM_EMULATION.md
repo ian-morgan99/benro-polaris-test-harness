@@ -265,8 +265,16 @@ candidate.
 
 `stage2_region_v91` is currently pinned but its bytes are not obtainable here: the
 candidate ships `pgphoto.stage2ondisk` inside `FwPkt/camera/appfs.ubifs`, a UBI
-image with compressed payload, and no UBIFS reader is installed. The sidecar names
-the exact missing path (`/app/lib/stage2/pgphoto.stage2ondisk`), its hash, and the
+image with compressed payload, and no UBIFS reader is installed (`ubireader`,
+`ubidump`, `jefferson`, `binwalk`, `unsquashfs` are all absent). This is **not** a
+network problem — `pypi.org/pypi/requests/json` and `github.com` both return 200
+from this host. It is that `ubireader` is not published on PyPI under that name
+(`pypi.org/pypi/ubireader/json` returns 404), so obtaining a reader means vendoring
+third-party code, which needs the repository owner's approval.
+
+Carving is not an option either: the image contains zero plaintext ARM ELF headers,
+so the payload is compressed and a real reader is required. The sidecar names the
+exact missing path (`/app/lib/stage2/pgphoto.stage2ondisk`), its hash, and the
 retrieval procedure. Discovery reports it as blocked rather than absent, so the
 lifecycle suite skips it with that reason instead of silently testing nothing.
 
