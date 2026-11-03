@@ -65,6 +65,8 @@ It should provide:
 - Camera transaction contracts that keep acknowledgement, output publication,
   restoration and capability degradation distinct; see
   [docs/CAMERA-TRANSACTIONS.md](docs/CAMERA-TRANSACTIONS.md).
+- Read-only final FwPkt package verification for ZIP layout, firmwareInfo hashes,
+  provenance and stock drift; see [docs/PACKAGE-VERIFIER.md](docs/PACKAGE-VERIFIER.md).
 
 ## Install and build
 

@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Polaris firmware package manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "title",
+    "source",
+    "status",
+    "packet_kind",
+    "packet_sha256",
+    "patcher_commit",
+    "target_profile",
+    "libgphoto2",
+    "managed_members"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,79}$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "physical",
+        "synthetic",
+        "derived"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "provisional",
+        "synthetic",
+        "superseded"
+      ]
+    },
+    "packet_kind": {
+      "const": "FwPkt"
+    },
+    "packet_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "patcher_commit": {
+      "type": "string",
+      "minLength": 7
+    },
+    "target_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "libgphoto2": {
+      "type": "object",
+      "required": [
+        "source_sha",
+        "source_kind"
+      ],
+      "properties": {
+        "source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "patched",
+            "upstream",
+            "unknown"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "managed_members": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stock": {
+      "type": "object",
+      "required": [
+        "packet_sha256",
+        "unchanged_members"
+      ],
+      "properties": {
+        "packet_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "unchanged_members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "appfs_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "evidence_id": {
+      "type": "string"
+    },
+    "source_issue": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -97,7 +97,7 @@ class TestWheelContents:
         with zipfile.ZipFile(wheel) as z:
             names = z.namelist()
         for schema in ("scenario", "evidence", "personality",
-                       "runtime-manifest"):
+                       "runtime-manifest", "package-manifest"):
             entry = f"polaris_harness/_data/schemas/{schema}.schema.json"
             assert entry in names, f"{entry} missing from wheel"
 

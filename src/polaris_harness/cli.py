@@ -30,6 +30,7 @@ from .astro_webui import create_app, run_server
 from .runtime import RuntimeVerifier
 from .protocol_contract import validate_protocol_contract_file
 from .safety_policy import assess_scenario_safety
+from .package_verifier import verify_package
 from .scenario_service import ScenarioService, load_scenario
 from .transport import TransportError
 from .validation import SchemaValidator
@@ -267,6 +268,17 @@ def runtime_report_command(args: argparse.Namespace) -> int:
         return 2
     print(f"Wrote runtime report: {args.json}")
     return 0 if valid else 5
+
+
+def package_verify_command(args: argparse.Namespace) -> int:
+    """Verify a finished FwPkt package without hardware or installation."""
+    try:
+        result = verify_package(args.fwpkt, args.manifest, args.stock)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: package verification failed: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    return 0 if result.valid else 5
 
 
 def safety_check_command(args: argparse.Namespace) -> int:
@@ -707,6 +719,7 @@ Examples:
   polaris-harness runtime report --root /path/to/firmware --manifest manifest.yaml --json report.json
   polaris-harness protocol validate --contract contracts/protocol/benro-9090-v1.json
   polaris-harness safety check --scenario scenarios/example --target physical
+  polaris-harness package verify --fwpkt FwPkt.zip --manifest package-manifest.json
   polaris-harness trace ingest --input trace.pcap --output scenarios/
   polaris-harness arm-emulate --suite
   polaris-harness arm-emulate --fixture tiny_fixture --output result.json
@@ -793,6 +806,25 @@ Exit codes:
         help="Acknowledge the reviewed safety plan before physical endpoint contact",
     )
     replay_parser.set_defaults(func=replay_command)
+
+    # Package verification command
+    package_parser = subparsers.add_parser(
+        "package", help="Finished firmware package verification commands"
+    )
+    package_subparsers = package_parser.add_subparsers(
+        dest="package_command", required=True
+    )
+    package_verify_parser = package_subparsers.add_parser(
+        "verify", help="Verify a finished FwPkt without installing it"
+    )
+    package_verify_parser.add_argument("--fwpkt", required=True, help="Path to FwPkt.zip")
+    package_verify_parser.add_argument(
+        "--manifest", required=True, help="Path to package provenance manifest"
+    )
+    package_verify_parser.add_argument(
+        "--stock", help="Optional exact stock FwPkt.zip for unchanged-member checks"
+    )
+    package_verify_parser.set_defaults(func=package_verify_command)
 
     # Safety policy command
     safety_parser = subparsers.add_parser(

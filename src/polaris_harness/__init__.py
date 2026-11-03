@@ -114,6 +114,12 @@ from .camera_transaction import (
     CameraTransactionEvent,
     CaptureTransactionGuard,
 )
+from .package_verifier import (
+    PackageIssue,
+    PackageVerificationResult,
+    load_package_manifest,
+    verify_package,
+)
 from .preview import (
     PreviewMode,
     PreviewOutcome,
@@ -253,6 +259,10 @@ __all__ = [
     "CameraCapabilityState",
     "CameraTransactionEvent",
     "CaptureTransactionGuard",
+    "PackageIssue",
+    "PackageVerificationResult",
+    "load_package_manifest",
+    "verify_package",
     "PreviewMode",
     "PreviewOutcome",
     "PreviewRead",
