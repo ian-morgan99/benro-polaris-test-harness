@@ -1,0 +1,57 @@
+schema_version: "1"
+id: k3iii-async-capture-timeout-v1
+version: 1
+title: K-3 III capture timeout is an unknown outcome
+source: synthetic
+status: synthetic
+source_issue: ian-morgan99/benro-polaris-test-harness#2
+initial_state: idle
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 1000
+states:
+  idle:
+    on_request:
+      - id: capture
+        match:
+          type: exact_text
+          value: "CAPTURE id=2#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "CAPTURE_ACCEPTED id=2#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: pending
+  pending:
+    on_request:
+      - id: timeout
+        match:
+          type: exact_text
+          value: "CAPTURE_TIMEOUT id=2#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "OUTCOME_UNKNOWN id=2 reason=timeout#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: idle
+assertions:
+  - timeout_is_not_success
+  - timeout_does_not_trigger_retry

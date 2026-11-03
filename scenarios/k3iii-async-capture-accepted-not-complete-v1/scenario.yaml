@@ -1,0 +1,88 @@
+schema_version: "1"
+id: k3iii-async-capture-accepted-not-complete-v1
+version: 1
+title: K-3 III capture acknowledgement is not completion
+source: derived
+status: provisional
+source_issue: ian-morgan99/benro-polaris-firmware-patcher#37
+evidence_id: derived-from-issue-2-observed-sequence
+observed_layer: polaris-protocol
+camera:
+  manufacturer: Pentax
+  model: K-3 III
+  firmware: unknown
+  usb_mode: unknown
+  usb_id: unknown
+polaris:
+  firmware: unknown
+  patcher_sha: unknown
+  fwpkt_sha256: unknown
+libgphoto2:
+  sha: unknown
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: idle
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  idle:
+    on_request:
+      - id: capture-accepted
+        match:
+          type: exact_text
+          value: "1&264&4&state:1;bulb:0;c:-1;#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 12
+            text: "264@state:1#"
+          - type: send
+            endpoint: command
+            after_ms: 2380
+            text: "264@state:-1005#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: pending
+  pending:
+    on_request:
+      - id: second-shutter-while-pending
+        match:
+          type: exact_text
+          value: "1&264&4&state:1;bulb:0;c:-1;#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "CAPTURE_REJECTED reason=output_pending#"
+      - id: final-file-complete
+        match:
+          type: exact_text
+          value: "FILE_COMPLETE id=1 path=/app/sd/IMG_0001.JPG#"
+          encoding: utf-8
+        actions:
+          - type: send
+            endpoint: command
+            after_ms: 0
+            text: "CAPTURE_COMPLETE id=1#"
+          - type: transition
+            endpoint: command
+            after_ms: 0
+            next_state: idle
+assertions:
+  - acknowledgement_enters_pending
+  - intermediate_minus_1005_is_not_terminal
+  - second_shutter_is_rejected_while_pending
+  - no_automatic_retry_is_emitted
+  - final_file_completion_is_required
