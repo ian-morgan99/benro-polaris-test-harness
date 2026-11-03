@@ -108,6 +108,12 @@ from .session_recovery import (
     RecoveryEvent,
     SessionGuard,
 )
+from .camera_transaction import (
+    ActiveCapture,
+    CameraCapabilityState,
+    CameraTransactionEvent,
+    CaptureTransactionGuard,
+)
 from .preview import (
     PreviewMode,
     PreviewOutcome,
@@ -243,6 +249,10 @@ __all__ = [
     "PendingOperation",
     "RecoveryEvent",
     "SessionGuard",
+    "ActiveCapture",
+    "CameraCapabilityState",
+    "CameraTransactionEvent",
+    "CaptureTransactionGuard",
     "PreviewMode",
     "PreviewOutcome",
     "PreviewRead",

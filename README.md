@@ -62,6 +62,9 @@ It should provide:
 - Deterministic session-generation and progress-aware recovery contracts for
   reconnect, stale-event, cancellation and bounded-stall testing; see
   [docs/SESSION-RECOVERY.md](docs/SESSION-RECOVERY.md).
+- Camera transaction contracts that keep acknowledgement, output publication,
+  restoration and capability degradation distinct; see
+  [docs/CAMERA-TRANSACTIONS.md](docs/CAMERA-TRANSACTIONS.md).
 
 ## Install and build
 
