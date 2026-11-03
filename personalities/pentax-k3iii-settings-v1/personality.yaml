@@ -1,0 +1,60 @@
+schema_version: "1"
+id: pentax-k3iii-settings-v1
+title: Pentax K-3 III setting visibility contract
+version: 1
+source: derived
+status: provisional
+evidence_id: derived-from-openpolaris-63
+polaris:
+  firmware: unknown
+  patcher_sha: unknown
+  fwpkt_sha256: unknown
+libgphoto2:
+  sha: unknown
+camera:
+  manufacturer: Pentax
+  model: K-3 III
+  firmware: unknown
+  usb_mode: unknown
+  usb_id: unknown
+settings:
+  iso:
+    current_value:
+      observed: true
+      value: unknown
+    available_choices:
+      observed: true
+      values: unknown
+    writable: unknown
+  shutter:
+    current_value:
+      observed: true
+      value: unknown
+    available_choices:
+      observed: true
+      values: unknown
+    writable: unknown
+  aperture:
+    current_value:
+      observed: true
+      value: unknown
+    available_choices:
+      observed: true
+      values: unknown
+    writable: unknown
+  white_balance:
+    current_value:
+      observed: true
+      value: unknown
+    available_choices:
+      observed: true
+      values: unknown
+    writable: unknown
+capture:
+  status: unknown
+preview:
+  status: unknown
+known_limitations:
+  - Derived from the documented Polaris-path settings visibility differential, not a direct A/B trace.
+  - This personality does not assign root cause to libgphoto2, Stage-2, firmware, or OpenPolaris.
+  - Actual values, choices, and write round-trips remain unknown until direct A/B evidence is retained.

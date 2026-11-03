@@ -45,6 +45,7 @@ It should provide:
 - preview-stream endpoints and controlled timing/failure modes;
 - a synthetic preview producer/listener contract for issue #3; see [docs/PREVIEW-HARNESS.md](docs/PREVIEW-HARNESS.md);
 - scripted camera personalities based on recorded physical evidence;
+- separate provisional K-3 III/K-1 II setting personalities with stale-state guards; see [docs/CAMERA-PERSONALITIES.md](docs/CAMERA-PERSONALITIES.md);
 - trace replay from sanitised real-device captures;
 - fault injection for known runtime and protocol failures;
 - a filesystem/runtime harness for Polaris `/app` path, loader, ABI and provenance checks;
