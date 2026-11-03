@@ -56,6 +56,7 @@ packages = ["src/polaris_harness"]
 # --fixtures-dir or POLARIS_ARM_FIXTURES_DIR.
 [tool.hatch.build.targets.wheel.force-include]
 "schemas" = "polaris_harness/_data/schemas"
+"contracts" = "polaris_harness/_data/contracts"
 "tests/fixtures/astro" = "polaris_harness/_data/astro_assets"
 
 [tool.ruff]

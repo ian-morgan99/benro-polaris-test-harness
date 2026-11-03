@@ -94,6 +94,14 @@ from .runtime import (
 from .install_simulation import InstallObservation, InstallSimulator, InstallState
 from .issue_forms import validate_pin_request_provenance
 from .personality_contract import PersonalitySession, load_personality
+from .protocol_contract import (
+    default_protocol_contract_path,
+    default_safe_entries,
+    find_contract,
+    load_protocol_contract,
+    validate_protocol_contract,
+    validate_protocol_contract_file,
+)
 from .preview import (
     PreviewMode,
     PreviewOutcome,
@@ -217,6 +225,12 @@ __all__ = [
     "validate_pin_request_provenance",
     "PersonalitySession",
     "load_personality",
+    "default_protocol_contract_path",
+    "default_safe_entries",
+    "find_contract",
+    "load_protocol_contract",
+    "validate_protocol_contract",
+    "validate_protocol_contract_file",
     "PreviewMode",
     "PreviewOutcome",
     "PreviewRead",

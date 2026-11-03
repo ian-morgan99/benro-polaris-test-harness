@@ -55,6 +55,8 @@ It should provide:
   using the Unicorn CPU emulator in user space without elevated privileges;
 - Astro WebUI harness server with synthetic Astro API and browser smoke test (issue #20),
   serving synthetic static assets over loopback in dry-run mode only.
+- Evidence-linked Polaris protocol contracts with exact code/subtype lookup and
+  fail-closed safety classification; see [docs/PROTOCOL-CONTRACTS.md](docs/PROTOCOL-CONTRACTS.md).
 
 ## Install and build
 

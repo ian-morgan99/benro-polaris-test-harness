@@ -108,6 +108,16 @@ class TestWheelContents:
             names = z.namelist()
         assert "polaris_harness/_data/astro_assets/astro_assets.json" in names
 
+    def test_wheel_ships_protocol_contracts(self, wheel):
+        import zipfile
+
+        with zipfile.ZipFile(wheel) as z:
+            names = z.namelist()
+        assert (
+            "polaris_harness/_data/contracts/protocol/benro-9090-v1.json"
+            in names
+        )
+
     def test_wheel_excludes_private_arm_fixtures(self, wheel):
         """Proprietary firmware regions must never be packaged.
 

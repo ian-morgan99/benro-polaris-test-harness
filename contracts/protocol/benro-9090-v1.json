@@ -1,0 +1,500 @@
+{
+  "schema_version": "1",
+  "id": "benro-9090-protocol-v1",
+  "version": 1,
+  "title": "Evidence-linked Benro Polaris 9090 protocol contracts",
+  "source": "derived",
+  "status": "provisional",
+  "entries": [
+    {
+      "id": "cam-get-state-286",
+      "code": 286,
+      "subtype": null,
+      "name": "CAM_GET_STATE",
+      "request": {
+        "grammar": "1&286&<subtype>&#",
+        "example": null
+      },
+      "response": {
+        "shape": "manufacturer/model/state/storage/photoFormat fields",
+        "example": "manufacturer:ricoh imaging company, ltd.;model:pentax k-3 mark iii;state:1;storage:2;photoFormat:2;"
+      },
+      "completion": "sync",
+      "safety_class": "read_only",
+      "camera_models": [
+        "Pentax K-3 III"
+      ],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": true,
+      "default_safe": true,
+      "notes": [
+        "Read-only probe returned the connected K-3 III identity and state:1."
+      ]
+    },
+    {
+      "id": "file-list-770",
+      "code": 770,
+      "subtype": null,
+      "name": "FILE_LIST",
+      "request": {
+        "grammar": "1&770&<subtype>&type:<class>;#",
+        "example": "1&770&2&type:normal;#"
+      },
+      "response": {
+        "shape": "file counts by class",
+        "example": "normal:3;lapse:0;focus:0;pan:0;sun:0;hdr:0;starskyStack:0"
+      },
+      "completion": "sync",
+      "safety_class": "read_only",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": true,
+      "default_safe": true,
+      "notes": [
+        "A payload is a class hint, not a safe filter for arbitrary file operations."
+      ]
+    },
+    {
+      "id": "sd-status-775",
+      "code": 775,
+      "subtype": null,
+      "name": "FILE_SD_STATUS",
+      "request": {
+        "grammar": "1&775&<subtype>&#",
+        "example": null
+      },
+      "response": {
+        "shape": "status and total/free/used space fields",
+        "example": "status:1;totalspace:121866;freespace:121781;usespace:85;"
+      },
+      "completion": "sync",
+      "safety_class": "read_only",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": true,
+      "default_safe": true,
+      "notes": []
+    },
+    {
+      "id": "battery-capacity-778",
+      "code": 778,
+      "subtype": null,
+      "name": "BATTERY_CAPACITY",
+      "request": {
+        "grammar": "1&778&<subtype>&#",
+        "example": null
+      },
+      "response": {
+        "shape": "capacity and charge fields",
+        "example": "capacity:100;charge:0;"
+      },
+      "completion": "sync",
+      "safety_class": "read_only",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": true,
+      "default_safe": true,
+      "notes": []
+    },
+    {
+      "id": "device-info-780",
+      "code": 780,
+      "subtype": null,
+      "name": "DEVICE_INFO",
+      "request": {
+        "grammar": "1&780&<subtype>&#",
+        "example": null
+      },
+      "response": {
+        "shape": "hardware/software version fields",
+        "example": "hw:1.1.1.2;sw:6.0.0.54;exAxis:;sv:1;ov:;"
+      },
+      "completion": "sync",
+      "safety_class": "read_only",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": true,
+      "default_safe": true,
+      "notes": [
+        "The sw field is the patcher's version stamp over the base firmware, not a substitute for FwVer."
+      ]
+    },
+    {
+      "id": "wifi-band-get-802",
+      "code": 802,
+      "subtype": null,
+      "name": "GET_WIFI_BAND",
+      "request": {
+        "grammar": "1&802&<subtype>&#",
+        "example": null
+      },
+      "response": {
+        "shape": "band field",
+        "example": "band:1;"
+      },
+      "completion": "sync",
+      "safety_class": "read_only",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": true,
+      "default_safe": true,
+      "notes": []
+    },
+    {
+      "id": "wifi-band-set-803",
+      "code": 803,
+      "subtype": null,
+      "name": "SET_WIFI_BAND",
+      "request": {
+        "grammar": "1&803&<subtype>&band:<value>;#",
+        "example": null
+      },
+      "response": {
+        "shape": "ret acknowledgement",
+        "example": "ret:0;"
+      },
+      "completion": "sync",
+      "safety_class": "state_write",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "protocol-map-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Observed acknowledgement is not permission for an unattended state mutation."
+      ]
+    },
+    {
+      "id": "photo-capture-264-subtype-4",
+      "code": 264,
+      "subtype": 4,
+      "name": "SET_PHOTO_RECORD_STATUS / CAPTURE",
+      "request": {
+        "grammar": "1&264&4&state:<state>;bulb:<seconds>;c:<value>;#",
+        "example": "1&264&4&state:1;bulb:0;c:-1;#"
+      },
+      "response": {
+        "shape": "asynchronous lifecycle events followed by a file obligation",
+        "example": "264@state:1# then 264@state:-1005# then a final image/file event"
+      },
+      "completion": "asynchronous",
+      "safety_class": "capture",
+      "camera_models": [
+        "Pentax K-3 III"
+      ],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/benro-polaris-firmware-patcher#37",
+          "ian-morgan99/OpenPolaris#60"
+        ],
+        "evidence_id": "k3iii-async-capture-observed",
+        "source_ref": "OpenPolaris:docs/evidence/k3iii-live-test-2026-09-06 plus patcher#37"
+      },
+      "confidence": "trace",
+      "status": "provisional",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Subtype 4 disambiguates capture from other uses of code 264. The first response is not completion."
+      ]
+    },
+    {
+      "id": "shutter-set-261",
+      "code": 261,
+      "subtype": null,
+      "name": "SET_SHUTTER",
+      "request": {
+        "grammar": "1&261&<subtype>&s:<index>;#",
+        "example": "1&261&2&s:44;#"
+      },
+      "response": {
+        "shape": "261@s:<index>;ret:<status>;#",
+        "example": "261@s:44;ret:0;#"
+      },
+      "completion": "sync",
+      "safety_class": "state_write",
+      "camera_models": [
+        "Pentax K-3 III",
+        "Pentax K-1 II"
+      ],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/benro-polaris-firmware-patcher#47",
+          "ian-morgan99/OpenPolaris#62"
+        ],
+        "evidence_id": "camera-code-261-evidence",
+        "source_ref": "OpenPolaris:docs/PROTOCOL-CODE-CONFLICT-20261007.md"
+      },
+      "confidence": "trace",
+      "status": "provisional",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Read-back and per-body qualification remain required; never infer success from ret:0 alone."
+      ]
+    },
+    {
+      "id": "focus-set-262",
+      "code": 262,
+      "subtype": null,
+      "name": "SET_FOCUS",
+      "request": {
+        "grammar": "1&262&<subtype>&focus/config fields;#",
+        "example": null
+      },
+      "response": {
+        "shape": "unknown until the focus contract is separately qualified",
+        "example": null
+      },
+      "completion": "unknown",
+      "safety_class": "unknown",
+      "camera_models": [
+        "Pentax K-3 III",
+        "Pentax K-1 II"
+      ],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/benro-polaris-firmware-patcher#47",
+          "ian-morgan99/OpenPolaris#62"
+        ],
+        "evidence_id": "focus-262-withheld",
+        "source_ref": "OpenPolaris:docs/PROTOCOL-CODE-CONFLICT-20261007.md"
+      },
+      "confidence": "unknown",
+      "status": "unverified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Withheld from automatic probing until the individual focus semantics are evidenced."
+      ]
+    },
+    {
+      "id": "focus-adjust-311",
+      "code": 311,
+      "subtype": null,
+      "name": "FOCUS_ADJUST",
+      "request": {
+        "grammar": "1&311&<subtype>&dir:+1/-1;step:<n>;#",
+        "example": null
+      },
+      "response": {
+        "shape": "unknown until the focus-adjust contract is separately qualified",
+        "example": null
+      },
+      "completion": "unknown",
+      "safety_class": "unknown",
+      "camera_models": [
+        "Pentax K-3 III",
+        "Pentax K-1 II"
+      ],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/benro-polaris-firmware-patcher#47",
+          "ian-morgan99/OpenPolaris#62"
+        ],
+        "evidence_id": "focus-311-withheld",
+        "source_ref": "OpenPolaris:docs/PROTOCOL-CODE-CONFLICT-20261007.md"
+      },
+      "confidence": "unknown",
+      "status": "unverified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Withheld from automatic probing until the individual focus semantics are evidenced."
+      ]
+    },
+    {
+      "id": "preview-start-291",
+      "code": 291,
+      "subtype": null,
+      "name": "CAMERA_PREVIEW_START",
+      "request": {
+        "grammar": "preview request grammar is not yet retained",
+        "example": null
+      },
+      "response": {
+        "shape": "preview producer/listener contract is separate from camera settings",
+        "example": null
+      },
+      "completion": "unknown",
+      "safety_class": "unknown",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#61",
+          "ian-morgan99/OpenPolaris#62"
+        ],
+        "evidence_id": "preview-291-withheld",
+        "source_ref": "OpenPolaris:docs/PROTOCOL-CODE-CONFLICT-20261007.md"
+      },
+      "confidence": "unknown",
+      "status": "unverified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Use the independent preview failure contracts until exact wire evidence is retained."
+      ]
+    },
+    {
+      "id": "preview-stop-292",
+      "code": 292,
+      "subtype": null,
+      "name": "CAMERA_PREVIEW_STOP",
+      "request": {
+        "grammar": "preview stop request grammar is not yet retained",
+        "example": null
+      },
+      "response": {
+        "shape": "preview producer/listener contract is separate from camera settings",
+        "example": null
+      },
+      "completion": "unknown",
+      "safety_class": "unknown",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#61",
+          "ian-morgan99/OpenPolaris#62"
+        ],
+        "evidence_id": "preview-292-withheld",
+        "source_ref": "OpenPolaris:docs/PROTOCOL-CODE-CONFLICT-20261007.md"
+      },
+      "confidence": "unknown",
+      "status": "unverified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "Use the independent preview failure contracts until exact wire evidence is retained."
+      ]
+    },
+    {
+      "id": "sun-shot-277",
+      "code": 277,
+      "subtype": null,
+      "name": "SUN_SHOT / unresolved camera operation",
+      "request": {
+        "grammar": "request grammar is not safely established",
+        "example": null
+      },
+      "response": {
+        "shape": "unverified and must not be treated as SET_SHUTTER",
+        "example": null
+      },
+      "completion": "unknown",
+      "safety_class": "unknown",
+      "camera_models": [
+        "Pentax K-3 III",
+        "Pentax K-1 II"
+      ],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#62"
+        ],
+        "evidence_id": "camera-277-withheld",
+        "source_ref": "OpenPolaris:docs/PROTOCOL-CODE-CONFLICT-20261007.md"
+      },
+      "confidence": "unknown",
+      "status": "unverified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "The historical label SET_SHUTTER is explicitly rejected; 277 is not a safe shutter setter."
+      ]
+    },
+    {
+      "id": "file-delete-all-789",
+      "code": 789,
+      "subtype": null,
+      "name": "FILE_DELETE_ALL",
+      "request": {
+        "grammar": "1&789&2&path:<class>/#",
+        "example": "1&789&2&path:normal/#"
+      },
+      "response": {
+        "shape": "destructive side effect; no reliable response",
+        "example": null
+      },
+      "completion": "unknown",
+      "safety_class": "media_destructive",
+      "camera_models": [],
+      "provenance": {
+        "source_issues": [
+          "ian-morgan99/OpenPolaris#64",
+          "ian-morgan99/OpenPolaris#66"
+        ],
+        "evidence_id": "destructive-789-2026-09-07",
+        "source_ref": "OpenPolaris@4076ce4:docs/evidence/2026-09-07/protocol-mapping/PROTOCOL-MAP-2026-09-07.md"
+      },
+      "confidence": "physical",
+      "status": "verified",
+      "automatic_probe": false,
+      "default_safe": false,
+      "notes": [
+        "The live probe deleted three user JPEGs without a useful trace. Never include in a safe probe set."
+      ]
+    }
+  ],
+  "default_safe": [
+    "cam-get-state-286",
+    "file-list-770",
+    "sd-status-775",
+    "battery-capacity-778",
+    "device-info-780",
+    "wifi-band-get-802"
+  ]
+}

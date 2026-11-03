@@ -1,0 +1,221 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Polaris Protocol Contract Pack Schema",
+  "description": "Evidence-linked command contracts for the Polaris 9090 protocol",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "title",
+    "source",
+    "status",
+    "entries",
+    "default_safe"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,79}$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "physical",
+        "trace",
+        "firmware-derived",
+        "synthetic",
+        "derived"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "provisional",
+        "synthetic",
+        "superseded"
+      ]
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "subtype",
+          "name",
+          "request",
+          "response",
+          "completion",
+          "safety_class",
+          "camera_models",
+          "provenance",
+          "confidence",
+          "status",
+          "automatic_probe",
+          "default_safe"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "subtype": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "request": {
+            "type": "object",
+            "required": [
+              "grammar",
+              "example"
+            ],
+            "properties": {
+              "grammar": {
+                "type": "string"
+              },
+              "example": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "response": {
+            "type": "object",
+            "required": [
+              "shape",
+              "example"
+            ],
+            "properties": {
+              "shape": {
+                "type": "string"
+              },
+              "example": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "completion": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "asynchronous",
+              "unknown"
+            ]
+          },
+          "safety_class": {
+            "type": "string",
+            "enum": [
+              "read_only",
+              "state_write",
+              "motion",
+              "capture",
+              "media_destructive",
+              "firmware_admin",
+              "unknown"
+            ]
+          },
+          "camera_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "source_issues",
+              "evidence_id",
+              "source_ref"
+            ],
+            "properties": {
+              "source_issues": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "evidence_id": {
+                "type": "string"
+              },
+              "source_ref": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "physical",
+              "trace",
+              "firmware-derived",
+              "unknown"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "provisional",
+              "unverified",
+              "superseded"
+            ]
+          },
+          "automatic_probe": {
+            "type": "boolean"
+          },
+          "default_safe": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "default_safe": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -28,6 +28,7 @@ from .arm_emulator import (
 from .arm_emulator.contract import ArmEmulationContract
 from .astro_webui import create_app, run_server
 from .runtime import RuntimeVerifier
+from .protocol_contract import validate_protocol_contract_file
 from .scenario_service import ScenarioService, load_scenario
 from .transport import TransportError
 from .validation import SchemaValidator
@@ -249,6 +250,18 @@ def runtime_report_command(args: argparse.Namespace) -> int:
         return 2
     print(f"Wrote runtime report: {args.json}")
     return 0 if valid else 5
+
+
+def protocol_contract_validate_command(args: argparse.Namespace) -> int:
+    """Validate one evidence-linked protocol contract pack."""
+    errors = validate_protocol_contract_file(Path(args.contract))
+    if errors:
+        print(f"FAIL protocol contract: {args.contract}")
+        for error in errors:
+            print(f"  - {error}")
+        return 2
+    print(f"PASS protocol contract: {args.contract}")
+    return 0
 
 
 def trace_ingest_command(args: argparse.Namespace) -> int:
@@ -659,6 +672,7 @@ Examples:
   polaris-harness replay --scenario scenarios/my-scenario/ --host 127.0.0.1 --port 9090
   polaris-harness runtime verify --root /path/to/firmware --manifest manifest.yaml
   polaris-harness runtime report --root /path/to/firmware --manifest manifest.yaml --json report.json
+  polaris-harness protocol validate --contract contracts/protocol/benro-9090-v1.json
   polaris-harness trace ingest --input trace.pcap --output scenarios/
   polaris-harness arm-emulate --suite
   polaris-harness arm-emulate --fixture tiny_fixture --output result.json
@@ -753,6 +767,21 @@ Exit codes:
     runtime_report_parser.add_argument("--manifest", required=True, help="Path to manifest file")
     runtime_report_parser.add_argument("--json", required=True, help="Output JSON file path")
     runtime_report_parser.set_defaults(func=runtime_report_command)
+
+    # Protocol contract command
+    protocol_parser = subparsers.add_parser(
+        "protocol", help="Evidence-linked protocol contract commands"
+    )
+    protocol_subparsers = protocol_parser.add_subparsers(
+        dest="protocol_command", required=True
+    )
+    protocol_validate_parser = protocol_subparsers.add_parser(
+        "validate", help="Validate a protocol contract pack"
+    )
+    protocol_validate_parser.add_argument(
+        "--contract", required=True, help="Path to protocol contract JSON/YAML"
+    )
+    protocol_validate_parser.set_defaults(func=protocol_contract_validate_command)
 
     # Trace ingest command
     trace_parser = subparsers.add_parser("trace", help="Trace processing commands")
