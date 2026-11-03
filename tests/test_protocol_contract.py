@@ -24,7 +24,7 @@ def test_protocol_pack_is_valid_and_safe_set_is_read_only():
     assert all(entry["safety_class"] == "read_only" for entry in safe)
     assert all(entry["status"] == "verified" for entry in safe)
     assert all(entry["automatic_probe"] for entry in safe)
-    assert find_contract(contract, 789)["default_safe"] is False
+    assert find_contract(contract, 789, 2)["default_safe"] is False
 
 
 def test_lookup_requires_exact_code_and_subtype():

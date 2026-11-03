@@ -46,7 +46,7 @@ read-only commands:
 - `802` Wi-Fi-band read
 
 `803` is a physically observed state write and is retained for documentation,
-but is not an unattended probe. `789` is explicitly classified as
+but is not an unattended probe. `789` subtype `2` is explicitly classified as
 `media_destructive` and is never safe: the retained evidence records that a live
 probe deleted user JPEGs. Camera setting/focus codes (`261`, `262`, `277`, and
 `311`) and preview codes (`291`, `292`) remain withheld until their exact

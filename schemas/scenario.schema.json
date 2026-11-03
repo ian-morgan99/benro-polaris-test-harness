@@ -320,6 +320,58 @@
     "personality": {
       "type": "string",
       "description": "Personality ID to use"
+    },
+    "safety": {
+      "type": "object",
+      "description": "Physical-target execution safety contract",
+      "required": [
+        "dry_run_plan",
+        "ledger",
+        "operator_abort",
+        "operations"
+      ],
+      "properties": {
+        "dry_run_plan": {"type": "boolean"},
+        "ledger": {"const": "required"},
+        "operator_abort": {"type": "boolean"},
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "rule_id",
+              "contract_id",
+              "safety_class",
+              "retry"
+            ],
+            "properties": {
+              "rule_id": {"type": "string"},
+              "contract_id": {"type": "string"},
+              "safety_class": {
+                "type": "string",
+                "enum": [
+                  "read_only",
+                  "state_write",
+                  "motion",
+                  "capture",
+                  "media_destructive",
+                  "firmware_admin",
+                  "unknown"
+                ]
+              },
+              "retry": {"type": "boolean"},
+              "state_snapshot": {"type": "boolean"},
+              "restore": {"type": "boolean"},
+              "readback": {"type": "boolean"},
+              "disposable_fixture": {"type": "boolean"},
+              "exact_scope": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

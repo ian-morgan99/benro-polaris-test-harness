@@ -29,6 +29,7 @@ from .arm_emulator.contract import ArmEmulationContract
 from .astro_webui import create_app, run_server
 from .runtime import RuntimeVerifier
 from .protocol_contract import validate_protocol_contract_file
+from .safety_policy import assess_scenario_safety
 from .scenario_service import ScenarioService, load_scenario
 from .transport import TransportError
 from .validation import SchemaValidator
@@ -146,6 +147,22 @@ def replay_command(args: argparse.Namespace) -> int:
     """Replay a scenario against a running endpoint."""
     try:
         scenario = load_scenario(args.scenario)
+        if args.target == "physical" and not args.plan:
+            print(
+                "ERROR: physical replay requires --plan; no endpoint was contacted",
+                file=sys.stderr,
+            )
+            return 2
+        safety = assess_scenario_safety(
+            scenario,
+            args.target,
+            args.allow,
+        )
+        if not safety.allowed:
+            print(json.dumps(safety.to_dict(), indent=2, sort_keys=True))
+            return 6
+        if args.target == "physical":
+            print(json.dumps(safety.to_dict(), indent=2, sort_keys=True))
         directory = Path(args.scenario)
         if directory.is_file():
             directory = directory.parent
@@ -250,6 +267,22 @@ def runtime_report_command(args: argparse.Namespace) -> int:
         return 2
     print(f"Wrote runtime report: {args.json}")
     return 0 if valid else 5
+
+
+def safety_check_command(args: argparse.Namespace) -> int:
+    """Print a fail-closed execution plan for a scenario."""
+    try:
+        scenario = load_scenario(args.scenario)
+        safety = assess_scenario_safety(
+            scenario,
+            args.target,
+            args.allow,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: safety check failed: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(safety.to_dict(), indent=2, sort_keys=True))
+    return 0 if safety.allowed else 6
 
 
 def protocol_contract_validate_command(args: argparse.Namespace) -> int:
@@ -673,6 +706,7 @@ Examples:
   polaris-harness runtime verify --root /path/to/firmware --manifest manifest.yaml
   polaris-harness runtime report --root /path/to/firmware --manifest manifest.yaml --json report.json
   polaris-harness protocol validate --contract contracts/protocol/benro-9090-v1.json
+  polaris-harness safety check --scenario scenarios/example --target physical
   polaris-harness trace ingest --input trace.pcap --output scenarios/
   polaris-harness arm-emulate --suite
   polaris-harness arm-emulate --fixture tiny_fixture --output result.json
@@ -745,7 +779,42 @@ Exit codes:
         default=5.0,
         help="Socket timeout in seconds",
     )
+    replay_parser.add_argument(
+        "--target", choices=("harness", "physical"), default="harness",
+        help="Execution target; physical is fail-closed",
+    )
+    replay_parser.add_argument(
+        "--allow", action="append",
+        choices=("state_write", "motion", "capture", "media_destructive", "firmware_admin"),
+        default=[], help="Explicit physical safety category unlock (repeatable)",
+    )
+    replay_parser.add_argument(
+        "--plan", action="store_true",
+        help="Acknowledge the reviewed safety plan before physical endpoint contact",
+    )
     replay_parser.set_defaults(func=replay_command)
+
+    # Safety policy command
+    safety_parser = subparsers.add_parser(
+        "safety", help="Fail-closed physical execution safety commands"
+    )
+    safety_subparsers = safety_parser.add_subparsers(
+        dest="safety_command", required=True
+    )
+    safety_check_parser = safety_subparsers.add_parser(
+        "check", help="Print and validate a scenario execution plan"
+    )
+    safety_check_parser.add_argument("--scenario", required=True, help="Scenario path")
+    safety_check_parser.add_argument(
+        "--target", choices=("harness", "physical"), required=True,
+        help="Execution target",
+    )
+    safety_check_parser.add_argument(
+        "--allow", action="append",
+        choices=("state_write", "motion", "capture", "media_destructive", "firmware_admin"),
+        default=[], help="Explicit physical safety category unlock (repeatable)",
+    )
+    safety_check_parser.set_defaults(func=safety_check_command)
 
     # Runtime verify command
     runtime_parser = subparsers.add_parser("runtime", help="Runtime verification commands")

@@ -42,7 +42,7 @@
     {
       "id": "file-list-770",
       "code": 770,
-      "subtype": null,
+      "subtype": 2,
       "name": "FILE_LIST",
       "request": {
         "grammar": "1&770&<subtype>&type:<class>;#",
@@ -256,7 +256,7 @@
     {
       "id": "shutter-set-261",
       "code": 261,
-      "subtype": null,
+      "subtype": 2,
       "name": "SET_SHUTTER",
       "request": {
         "grammar": "1&261&<subtype>&s:<index>;#",
@@ -459,7 +459,7 @@
     {
       "id": "file-delete-all-789",
       "code": 789,
-      "subtype": null,
+      "subtype": 2,
       "name": "FILE_DELETE_ALL",
       "request": {
         "grammar": "1&789&2&path:<class>/#",

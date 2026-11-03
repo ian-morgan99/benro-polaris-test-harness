@@ -102,6 +102,7 @@ from .protocol_contract import (
     validate_protocol_contract,
     validate_protocol_contract_file,
 )
+from .safety_policy import SafetyIssue, SafetyReport, assess_scenario_safety
 from .preview import (
     PreviewMode,
     PreviewOutcome,
@@ -231,6 +232,9 @@ __all__ = [
     "load_protocol_contract",
     "validate_protocol_contract",
     "validate_protocol_contract_file",
+    "SafetyIssue",
+    "SafetyReport",
+    "assess_scenario_safety",
     "PreviewMode",
     "PreviewOutcome",
     "PreviewRead",

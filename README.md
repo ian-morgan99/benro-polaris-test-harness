@@ -57,6 +57,8 @@ It should provide:
   serving synthetic static assets over loopback in dry-run mode only.
 - Evidence-linked Polaris protocol contracts with exact code/subtype lookup and
   fail-closed safety classification; see [docs/PROTOCOL-CONTRACTS.md](docs/PROTOCOL-CONTRACTS.md).
+- Fail-closed physical-target safety preflight with explicit category unlocks; see
+  [docs/SAFETY-POLICY.md](docs/SAFETY-POLICY.md).
 
 ## Install and build
 
