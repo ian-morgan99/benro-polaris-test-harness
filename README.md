@@ -812,6 +812,15 @@ The runtime harness should assert at minimum:
 
 This is intended to catch the class of defect where direct `gphoto2` succeeds but the packaged pgphoto/Stage-2 runtime resolves a mismatched or incomplete stack.
 
+The current verifier now models each declared resolution mechanism separately
+(`LD_LIBRARY_PATH`, `CAMLIBS`, `IOLIBS`, `LD_PRELOAD`, explicit paths and
+wrappers) when the manifest supplies an ordered `search_paths` list and
+`expected_selected` winner. It reports selected and shadowed copies and emits
+stable issue codes in JSON. This remains a static manifest/search-order check:
+DT_NEEDED closure, symbol-version closure, executable wrapper targets, and
+actual loaded-process mappings are still release-gate work, not implied by a
+verifier PASS.
+
 ## Mandatory process for new scenarios
 
 1. **Observe or define the source behaviour.**

@@ -229,6 +229,7 @@ def runtime_report_command(args: argparse.Namespace) -> int:
         "issues": [
             {
                 "severity": issue.severity.value,
+                "code": issue.code,
                 "message": issue.message,
                 "path": issue.path,
                 "details": issue.details,

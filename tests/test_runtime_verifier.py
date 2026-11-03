@@ -108,3 +108,83 @@ def test_verifier_rejects_abi_mismatch(tmp_path):
 
     assert not valid
     assert any("ABI mismatch" in issue.message for issue in issues)
+
+
+def test_method_specific_resolution_reports_shadowed_copy_in_declared_order(tmp_path):
+    stage2 = tmp_path / "app" / "stage2" / "libfoo.so"
+    stock = tmp_path / "app" / "stock" / "libfoo.so"
+    stage2.parent.mkdir(parents=True)
+    stock.parent.mkdir(parents=True)
+    stage2.write_bytes(b"stage2")
+    stock.write_bytes(b"stock")
+    digest = hashlib.sha256(stage2.read_bytes()).hexdigest()
+    manifest = manifest_for("/app/stage2/libfoo.so", digest)
+    manifest["resolution_rules"] = [
+        {
+            "artifact_path": "/app/stage2/libfoo.so",
+            "resolution_method": "ld_library_path",
+            "environment_variable": "LD_LIBRARY_PATH",
+            "search_paths": ["/app/stage2", "/app/stock"],
+            "filename": "libfoo.so",
+            "expected_selected": "/app/stage2/libfoo.so",
+        }
+    ]
+
+    valid, issues = RuntimeVerifier(str(tmp_path)).verify_manifest(manifest)
+
+    assert valid
+    assert issues == []
+    result = RuntimeVerifier(str(tmp_path))
+    result.verify_manifest(manifest)
+    assert result.resolution_results[0]["selected"] == "/app/stage2/libfoo.so"
+    assert result.resolution_results[0]["shadowed"] == ["/app/stock/libfoo.so"]
+
+
+def test_method_specific_resolution_rejects_stale_winner(tmp_path):
+    stage2 = tmp_path / "app" / "stage2" / "libfoo.so"
+    stock = tmp_path / "app" / "stock" / "libfoo.so"
+    stage2.parent.mkdir(parents=True)
+    stock.parent.mkdir(parents=True)
+    stage2.write_bytes(b"stage2")
+    stock.write_bytes(b"stock")
+    digest = hashlib.sha256(stage2.read_bytes()).hexdigest()
+    manifest = manifest_for("/app/stage2/libfoo.so", digest)
+    manifest["resolution_rules"] = [
+        {
+            "artifact_path": "/app/stage2/libfoo.so",
+            "resolution_method": "camlibs",
+            "environment_variable": "CAMLIBS",
+            "search_paths": ["/app/stock", "/app/stage2"],
+            "filename": "libfoo.so",
+            "expected_selected": "/app/stage2/libfoo.so",
+        }
+    ]
+
+    valid, issues = RuntimeVerifier(str(tmp_path)).verify_manifest(manifest)
+
+    assert not valid
+    mismatch = [issue for issue in issues if issue.code == "RESOLUTION_WINNER_MISMATCH"]
+    assert len(mismatch) == 1
+    assert mismatch[0].details["selected"] == "/app/stock/libfoo.so"
+
+
+def test_method_specific_resolution_requires_matching_environment_variable(tmp_path):
+    path = tmp_path / "app" / "libfoo.so"
+    path.parent.mkdir()
+    path.write_bytes(b"fixture")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest = manifest_for("/app/libfoo.so", digest)
+    manifest["resolution_rules"] = [
+        {
+            "artifact_path": "/app/libfoo.so",
+            "resolution_method": "iolibs",
+            "environment_variable": "CAMLIBS",
+            "search_paths": ["/app"],
+            "filename": "libfoo.so",
+        }
+    ]
+
+    valid, issues = RuntimeVerifier(str(tmp_path)).verify_manifest(manifest)
+
+    assert not valid
+    assert any(issue.code == "RESOLUTION_ENVIRONMENT_MISMATCH" for issue in issues)

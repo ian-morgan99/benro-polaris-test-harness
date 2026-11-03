@@ -29,6 +29,7 @@ class VerificationIssue:
     message: str
     path: str
     details: Dict[str, Any] = None
+    code: str = "RUNTIME_VERIFICATION_ERROR"
 
 
 @dataclass
@@ -170,59 +171,145 @@ class RuntimeVerifier:
         return issues
 
     def _verify_resolution_rules(self, resolution_rules: List[Dict[str, Any]]) -> List[VerificationIssue]:
-        """Verify resolution rules.
+        """Verify each declared loader/search mechanism independently.
 
-        Args:
-            resolution_rules: List of resolution rules to verify
-
-        Returns:
-            List of verification issues
+        A rule is a declarative model of the search order supplied by the
+        wrapper or runtime manifest. The verifier does not execute a loader.
+        For directory-based mechanisms, ``search_paths`` plus ``filename``
+        produce the candidates in declared order; the first existing candidate
+        is selected and later candidates are reported as shadowed.
         """
-        issues = []
+        issues: List[VerificationIssue] = []
+        expected_environment = {
+            "ld_preload": "LD_PRELOAD",
+            "ld_library_path": "LD_LIBRARY_PATH",
+            "camlibs": "CAMLIBS",
+            "iolibs": "IOLIBS",
+        }
 
         for rule in resolution_rules:
             artifact_path = rule.get("artifact_path")
             resolution_method = rule.get("resolution_method")
-
             if not artifact_path or not resolution_method:
-                issues.append(VerificationIssue(
-                    severity=VerificationResult.ERROR,
-                    message="Resolution rule missing required fields",
-                    path="resolution_rules"
-                ))
+                issues.append(
+                    VerificationIssue(
+                        severity=VerificationResult.ERROR,
+                        message="Resolution rule missing required fields",
+                        path="resolution_rules",
+                        code="RESOLUTION_RULE_INVALID",
+                    )
+                )
                 continue
 
-            candidates = [artifact_path, *rule.get("fallback_paths", [])]
-            existing = []
+            required_environment = expected_environment.get(resolution_method)
+            declared_environment = rule.get("environment_variable")
+            if required_environment and declared_environment != required_environment:
+                issues.append(
+                    VerificationIssue(
+                        severity=VerificationResult.ERROR,
+                        message=(
+                            f"{resolution_method} must declare "
+                            f"environment_variable={required_environment}"
+                        ),
+                        path=artifact_path,
+                        code="RESOLUTION_ENVIRONMENT_MISMATCH",
+                    )
+                )
+
+            candidates = self._resolution_candidates(rule)
+            existing: List[Tuple[str, Path]] = []
             for candidate in candidates:
                 candidate_path = self._safe_path(candidate)
                 if candidate_path is None:
-                    issues.append(VerificationIssue(
-                        severity=VerificationResult.ERROR,
-                        message=f"Resolution path escapes verification root: {candidate}",
-                        path=artifact_path,
-                    ))
+                    issues.append(
+                        VerificationIssue(
+                            severity=VerificationResult.ERROR,
+                            message=f"Resolution path escapes verification root: {candidate}",
+                            path=artifact_path,
+                            code="RESOLUTION_PATH_ESCAPE",
+                        )
+                    )
                 elif candidate_path.is_file():
                     existing.append((candidate, candidate_path))
 
+            expected_selected = rule.get("expected_selected")
+            if expected_selected:
+                expected_path = self._safe_path(expected_selected)
+                if expected_path is None or not expected_path.is_file():
+                    issues.append(
+                        VerificationIssue(
+                            severity=VerificationResult.ERROR,
+                            message=(
+                                "Expected resolution winner does not exist: "
+                                f"{expected_selected}"
+                            ),
+                            path=artifact_path,
+                            code="EXPECTED_RESOLUTION_MISSING",
+                        )
+                    )
+
             if not existing:
-                issues.append(VerificationIssue(
-                    severity=VerificationResult.ERROR,
-                    message=f"No candidate resolves for: {artifact_path}",
-                    path=artifact_path,
-                ))
+                issues.append(
+                    VerificationIssue(
+                        severity=VerificationResult.ERROR,
+                        message=f"No candidate resolves for: {artifact_path}",
+                        path=artifact_path,
+                        code="RESOLUTION_UNRESOLVED",
+                    )
+                )
                 continue
 
             selected, selected_path = existing[0]
-            self.resolution_results.append({
-                "artifact_path": artifact_path,
-                "resolution_method": resolution_method,
-                "selected": selected,
-                "selected_path": str(selected_path),
-                "shadowed": [candidate for candidate, _ in existing[1:]],
-            })
+            if expected_selected and selected != expected_selected:
+                issues.append(
+                    VerificationIssue(
+                        severity=VerificationResult.ERROR,
+                        message=(
+                            f"Resolution winner mismatch for {artifact_path}: "
+                            f"expected {expected_selected}, selected {selected}"
+                        ),
+                        path=artifact_path,
+                        details={
+                            "expected_selected": expected_selected,
+                            "selected": selected,
+                            "shadowed": [candidate for candidate, _ in existing[1:]],
+                        },
+                        code="RESOLUTION_WINNER_MISMATCH",
+                    )
+                )
+
+            self.resolution_results.append(
+                {
+                    "artifact_path": artifact_path,
+                    "resolution_method": resolution_method,
+                    "environment_variable": declared_environment,
+                    "search_order": candidates,
+                    "selected": selected,
+                    "selected_path": str(selected_path),
+                    "expected_selected": expected_selected,
+                    "shadowed": [candidate for candidate, _ in existing[1:]],
+                    "selection_basis": "declared-search-order",
+                }
+            )
 
         return issues
+
+    def _resolution_candidates(self, rule: Dict[str, Any]) -> List[str]:
+        """Return candidate device paths in the manifest's declared order."""
+        search_paths = rule.get("search_paths")
+        if not search_paths:
+            return [rule["artifact_path"], *rule.get("fallback_paths", [])]
+
+        filename = rule.get("filename")
+        candidates: List[str] = []
+        for search_path in search_paths:
+            if not isinstance(search_path, str) or not search_path:
+                continue
+            if filename:
+                candidates.append(f"{search_path.rstrip('/')}/{filename}")
+            else:
+                candidates.append(search_path)
+        return candidates
 
     def _verify_runtime_assertions(self, assertions: List[Dict[str, Any]]) -> List[VerificationIssue]:
         """Verify runtime assertions.

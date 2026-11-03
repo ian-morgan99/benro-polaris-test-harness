@@ -87,8 +87,33 @@
           },
           "resolution_method": {
             "type": "string",
-            "enum": ["ld_preload", "ld_library_path", "dlopen_search", "explicit_path"],
+            "enum": [
+              "ld_preload",
+              "ld_library_path",
+              "dlopen_search",
+              "camlibs",
+              "iolibs",
+              "wrapper",
+              "explicit_path"
+            ],
             "description": "Resolution method"
+          },
+          "environment_variable": {
+            "type": "string",
+            "description": "Environment variable that supplies the search path"
+          },
+          "search_paths": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Ordered device-style directories or files to search"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Basename to append to directory search paths"
+          },
+          "expected_selected": {
+            "type": "string",
+            "description": "Path the declared resolution mechanism must select"
           },
           "fallback_paths": {
             "type": "array",

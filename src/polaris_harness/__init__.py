@@ -93,6 +93,7 @@ from .runtime import (
 )
 from .install_simulation import InstallObservation, InstallSimulator, InstallState
 from .issue_forms import validate_pin_request_provenance
+from .personality_contract import PersonalitySession, load_personality
 from .preview import (
     PreviewMode,
     PreviewOutcome,
@@ -214,6 +215,8 @@ __all__ = [
     "validate_personality_file",
     "validate_runtime_manifest_file",
     "validate_pin_request_provenance",
+    "PersonalitySession",
+    "load_personality",
     "PreviewMode",
     "PreviewOutcome",
     "PreviewRead",
