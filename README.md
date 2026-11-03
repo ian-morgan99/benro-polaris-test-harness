@@ -67,6 +67,8 @@ It should provide:
   [docs/CAMERA-TRANSACTIONS.md](docs/CAMERA-TRANSACTIONS.md).
 - Read-only final FwPkt package verification for ZIP layout, firmwareInfo hashes,
   provenance and stock drift; see [docs/PACKAGE-VERIFIER.md](docs/PACKAGE-VERIFIER.md).
+- CI publishes a qualification-status artifact that keeps harness PASS separate
+  from package/runtime/physical NOT TESTED states.
 
 ## Install and build
 

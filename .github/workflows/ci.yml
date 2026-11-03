@@ -305,6 +305,43 @@ jobs:
         
         echo "Quality gate passed"
 
+    - name: Generate qualification status
+      run: |
+        python - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        report = {
+            "schema_version": "1",
+            "harness_commit": os.environ.get("GITHUB_SHA", "unknown"),
+            "qualification": {
+                "harness_contract": "PASS",
+                "package_integrity": "NOT_TESTED",
+                "runtime_package": "NOT_TESTED",
+                "direct_camera": "NOT_TESTED",
+                "polaris_hardware": "NOT_TESTED",
+                "openpolaris_physical_e2e": "NOT_TESTED",
+            },
+            "boundary": (
+                "CI proves repository contracts only; it does not qualify firmware, "
+                "a camera, Polaris hardware, or OpenPolaris physical E2E."
+            ),
+        }
+        Path("qualification-status.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(report, indent=2, sort_keys=True))
+        PY
+
+    - name: Upload qualification status
+      uses: actions/upload-artifact@v4
+      with:
+        name: qualification-status
+        path: qualification-status.json
+        retention-days: 7
+
     - name: Generate coverage report
       run: |
         pytest tests/ --cov=src/polaris_harness --cov-report=xml --cov-report=term-missing
