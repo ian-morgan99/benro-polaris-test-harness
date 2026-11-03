@@ -59,6 +59,9 @@ It should provide:
   fail-closed safety classification; see [docs/PROTOCOL-CONTRACTS.md](docs/PROTOCOL-CONTRACTS.md).
 - Fail-closed physical-target safety preflight with explicit category unlocks; see
   [docs/SAFETY-POLICY.md](docs/SAFETY-POLICY.md).
+- Deterministic session-generation and progress-aware recovery contracts for
+  reconnect, stale-event, cancellation and bounded-stall testing; see
+  [docs/SESSION-RECOVERY.md](docs/SESSION-RECOVERY.md).
 
 ## Install and build
 

@@ -1,0 +1,62 @@
+schema_version: "1"
+id: recovery-progress-aware-operation-v1
+version: 1
+title: Progressing work is not a stall, but no progress is bounded
+source: synthetic
+status: synthetic
+source_issue: ian-morgan99/benro-polaris-test-harness#9
+evidence_id: synthetic-recovery-progress-v1
+observed_layer: polaris-protocol
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: idle
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 10000
+states:
+  idle:
+    on_request:
+      - id: long-operation
+        match:
+          type: exact_text
+          value: "LONG_OP id=1#"
+        actions:
+          - type: send
+            endpoint: command
+            text: "OP_ACCEPTED id=1#"
+          - type: transition
+            endpoint: command
+            next_state: progressing
+  progressing:
+    on_request:
+      - id: progress-event
+        match:
+          type: exact_text
+          value: "PROGRESS id=1#"
+        actions:
+          - type: send
+            endpoint: command
+            text: "PROGRESS_RECORDED id=1#"
+      - id: no-progress-timeout
+        match:
+          type: exact_text
+          value: "NO_PROGRESS id=1#"
+        actions:
+          - type: send
+            endpoint: command
+            text: "OUTCOME_UNKNOWN id=1 reason=no_progress#"
+          - type: transition
+            endpoint: command
+            next_state: idle
+assertions:
+  - progress_resets_no_progress_deadline
+  - safety_ceiling_remains_bounded
+  - no_progress_becomes_unknown

@@ -1,0 +1,53 @@
+schema_version: "1"
+id: recovery-request-timeout-v1
+version: 1
+title: Accepted request with no response becomes an unknown outcome
+source: synthetic
+status: synthetic
+source_issue: ian-morgan99/benro-polaris-test-harness#9
+evidence_id: synthetic-recovery-timeout-v1
+observed_layer: polaris-protocol
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: idle
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 5000
+states:
+  idle:
+    on_request:
+      - id: request-start
+        match:
+          type: exact_text
+          value: "REQ id=1#"
+        actions:
+          - type: send
+            endpoint: command
+            text: "ACK id=1#"
+          - type: transition
+            endpoint: command
+            next_state: waiting
+  waiting:
+    on_request:
+      - id: request-timeout
+        match:
+          type: exact_text
+          value: "TIMEOUT id=1#"
+        actions:
+          - type: send
+            endpoint: command
+            text: "OUTCOME_UNKNOWN id=1 reason=timeout#"
+          - type: transition
+            endpoint: command
+            next_state: idle
+assertions:
+  - bounded_terminal_outcome
+  - no_automatic_retry

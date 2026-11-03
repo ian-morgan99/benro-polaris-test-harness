@@ -1,0 +1,37 @@
+schema_version: "1"
+id: recovery-late-event-after-reconnect-v1
+version: 1
+title: A completion from session N cannot complete session N plus one
+source: synthetic
+status: synthetic
+source_issue: ian-morgan99/benro-polaris-test-harness#9
+evidence_id: synthetic-recovery-generation-v1
+observed_layer: polaris-protocol
+endpoints:
+  command:
+    transport: tcp
+    framing:
+      type: delimiter
+      delimiter_text: "#"
+    bind:
+      host: 127.0.0.1
+      port: 0
+initial_state: idle
+limits:
+  max_frame_bytes: 65536
+  max_connections: 2
+  scenario_timeout_ms: 5000
+states:
+  idle:
+    on_request:
+      - id: session-event
+        match:
+          type: exact_text
+          value: "SESSION_EVENT generation=1 request=1#"
+        actions:
+          - type: send
+            endpoint: command
+            text: "LATE_EVENT_DISCARDED generation=1 request=1#"
+assertions:
+  - stale_event_is_discarded
+  - reconnect_starts_new_generation

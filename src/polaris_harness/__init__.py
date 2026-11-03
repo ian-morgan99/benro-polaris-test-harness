@@ -103,6 +103,11 @@ from .protocol_contract import (
     validate_protocol_contract_file,
 )
 from .safety_policy import SafetyIssue, SafetyReport, assess_scenario_safety
+from .session_recovery import (
+    PendingOperation,
+    RecoveryEvent,
+    SessionGuard,
+)
 from .preview import (
     PreviewMode,
     PreviewOutcome,
@@ -235,6 +240,9 @@ __all__ = [
     "SafetyIssue",
     "SafetyReport",
     "assess_scenario_safety",
+    "PendingOperation",
+    "RecoveryEvent",
+    "SessionGuard",
     "PreviewMode",
     "PreviewOutcome",
     "PreviewRead",
