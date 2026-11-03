@@ -76,6 +76,8 @@ All endpoints are dry-run only — they never contact or mutate a physical Polar
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/astro/state` | GET | Return current synthetic camera/mount state |
+| `/api/astro/location` | GET | Return bounded synthetic location |
+| `/api/astro/camera-ready` | POST | Set synthetic camera readiness for the dry-run session |
 | `/api/astro/capture` | POST | Start a synthetic capture |
 | `/api/astro/solve` | POST | Run synthetic platesolve (accept/reject) |
 | `/api/astro/goto` | POST | Slew to RA/Dec target |
@@ -83,6 +85,9 @@ All endpoints are dry-run only — they never contact or mutate a physical Polar
 | `/api/astro/exif` | POST | Opt in/out of EXIF |
 | `/api/astro/rate-control` | POST | Rate control — always 403 (unavailable) |
 | `/api/astro/reset` | POST | Reset synthetic session state |
+| `/api/astro/scenarios` | GET | Return the synthetic scenario catalogue |
+| `/api/astro/scenarios/<scenario_id>` | GET | Return one synthetic scenario definition |
+| `/api/astro/diagnostics` | GET | Return bounded synthetic diagnostics |
 | `/api/astro/manifest` | GET | Return asset provenance manifest |
 | `/api/astro/compatibility` | GET | Return route/API compatibility report |
 

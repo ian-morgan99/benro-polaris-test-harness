@@ -14,11 +14,11 @@
         </header>
 
         <nav>
-            <button onclick="showSection('dashboard')">Dashboard</button>
-            <button onclick="showSection('capture')">Capture</button>
-            <button onclick="showSection('solve')">Platesolve</button>
-            <button onclick="showSection('goto')">GOTO</button>
-            <button onclick="showSection('diagnostics')">Diagnostics</button>
+            <button onclick="showSection('dashboard', this)">Dashboard</button>
+            <button onclick="showSection('capture', this)">Capture</button>
+            <button onclick="showSection('solve', this)">Platesolve</button>
+            <button onclick="showSection('goto', this)">GOTO</button>
+            <button onclick="showSection('diagnostics', this)">Diagnostics</button>
         </nav>
 
         <section id="dashboard" class="panel active">
@@ -41,6 +41,8 @@
                     <span id="rate-control" class="value unavailable">unavailable</span>
                 </div>
             </div>
+            <button class="btn-primary" onclick="setCameraReady(true)">Mark Synthetic Camera Ready</button>
+            <div class="result-area" id="camera-ready-result"></div>
             <div class="result-area" id="dashboard-result"></div>
         </section>
 

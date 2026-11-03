@@ -9,11 +9,11 @@ let currentState = {
     rate_control: 'unavailable'
 };
 
-function showSection(name) {
+function showSection(name, button) {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
     document.getElementById(name).classList.add('active');
-    event.target.classList.add('active');
+    if (button) button.classList.add('active');
     refreshState();
 }
 
@@ -48,6 +48,26 @@ function updateStateUI(state) {
     }
     if (rateEl) {
         rateEl.className = 'value ' + (state.rate_control === 'unavailable' ? 'unavailable' : '');
+    }
+}
+
+async function setCameraReady(ready) {
+    const resultEl = document.getElementById('camera-ready-result');
+    try {
+        const res = await fetch(`${API_BASE}/api/astro/camera-ready`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ready })
+        });
+        const data = await res.json();
+        resultEl.className = 'result-area ' + (data.ok ? 'success' : 'error');
+        resultEl.textContent = JSON.stringify(data, null, 2);
+        resultEl.style.display = 'block';
+        refreshState();
+    } catch (e) {
+        resultEl.className = 'result-area error';
+        resultEl.textContent = 'Error: ' + e.message;
+        resultEl.style.display = 'block';
     }
 }
 

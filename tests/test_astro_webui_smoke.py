@@ -11,15 +11,12 @@ that:
 All actions are dry-run only — no physical Polaris or camera is contacted.
 """
 
-import json
-import threading
-import time
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from polaris_harness.astro_webui import create_app, run_server
-
+from polaris_harness.astro_webui import create_app
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "astro"
 
@@ -44,9 +41,12 @@ class TestAstroWebUIServer:
 
     def test_static_assets_return_200_with_recorded_hashes(self, server):
         """Static assets (JS, CSS) should return HTTP 200 with correct hashes."""
+        manifest = server.get("/api/astro/manifest").get_json()
         for asset in ["app.js", "style.css"]:
             resp = server.get(f"/{asset}")
             assert resp.status_code == 200, f"Asset {asset} should return 200"
+            actual = hashlib.sha256(resp.data).hexdigest()
+            assert actual == manifest["assets"][asset]["sha256"]
 
     def test_asset_manifest_returns_hashes(self, server):
         """The manifest endpoint should return recorded SHA-256 hashes."""
@@ -84,6 +84,18 @@ class TestAstroWebUIServer:
         assert data["ok"] is False
         assert "camera not ready" in data["error"]
 
+    def test_camera_ready_transition_enables_capture(self, server):
+        """The synthetic client can complete a bounded capture session."""
+        ready = server.post("/api/astro/camera-ready", json={"ready": True})
+        assert ready.status_code == 200
+        assert ready.get_json()["camera_ready"] is True
+
+        capture = server.post(
+            "/api/astro/capture", json={"exposure_ms": 1000, "iso": 800}
+        )
+        assert capture.status_code == 200
+        assert capture.get_json()["ok"] is True
+
     def test_capture_when_camera_ready(self, server):
         """Capture should succeed when camera is ready."""
         # First set camera ready via state manipulation
@@ -114,6 +126,32 @@ class TestAstroWebUIServer:
         assert data["exif_actions"] == 0
         assert data["dry_run"] is True
 
+    def test_location_diagnostics_and_scenario_catalogue(self, server):
+        location = server.get("/api/astro/location")
+        assert location.status_code == 200
+        assert location.get_json()["source"] == "synthetic"
+        assert location.get_json()["dry_run"] is True
+
+        diagnostics = server.get("/api/astro/diagnostics")
+        assert diagnostics.status_code == 200
+        data = diagnostics.get_json()
+        assert data["dry_run"] is True
+        assert data["compatibility"]["all_documented_served"] is True
+        assert data["limitations"]
+        assert data["assets"]["manifest_present"] is True
+
+        scenarios = server.get("/api/astro/scenarios")
+        assert scenarios.status_code == 200
+        scenario_data = scenarios.get_json()
+        assert scenario_data["source"] == "synthetic"
+        ids = {item["id"] for item in scenario_data["scenarios"]}
+        assert "astro-solve-rejected" in ids
+
+        detail = server.get("/api/astro/scenarios/astro-solve-rejected")
+        assert detail.status_code == 200
+        assert detail.get_json()["source"] == "synthetic"
+        assert server.get("/api/astro/scenarios/no-such-scenario").status_code == 404
+
     def test_rate_control_unavailable(self, server):
         """Rate control should return 403 unless separately qualified."""
         resp = server.post(
@@ -137,12 +175,19 @@ class TestAstroWebUIServer:
         assert "POST /api/astro/capture" in data["served_routes"]
         assert "POST /api/astro/solve" in data["served_routes"]
 
+    def test_spa_uses_explicit_navigation_and_diagnostics_route(self, server):
+        html = server.get("/").data.decode("utf-8")
+        js = server.get("/app.js").data.decode("utf-8")
+        assert "showSection('dashboard', this)" in html
+        assert "function showSection(name, button)" in js
+        assert "/api/astro/diagnostics" in js
+
     def test_spa_loads_javascript_and_css(self, server):
         """The SPA HTML should reference its JavaScript and CSS assets."""
         resp = server.get("/")
         html = resp.data.decode("utf-8")
-        assert 'app.js' in html
-        assert 'style.css' in html
+        assert "app.js" in html
+        assert "style.css" in html
 
     def test_dry_run_marker_in_response(self, server):
         """All API responses should be marked as dry_run."""

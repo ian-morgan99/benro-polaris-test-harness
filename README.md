@@ -249,7 +249,7 @@ The Astro WebUI harness server lives in `src/polaris_harness/astro_webui/` and i
 
 - `create_app()` — Flask-based server serving synthetic Astro static assets
 - `run_server()` — CLI entry point (`polaris-harness astro-webui --profile synthetic`)
-- Synthetic Astro API: state, capture, solve, goto, tracking, exif, rate-control, reset
+- Synthetic Astro API: state, location, camera-ready, capture, solve, goto, tracking, exif, rate-control, reset, diagnostics and scenario catalogue
 - 9 schema-backed synthetic scenarios (all `source: synthetic`)
 - Route/API compatibility report endpoint (`/api/astro/compatibility`)
 - Asset provenance manifest with SHA-256 hashes

@@ -6,10 +6,10 @@ All scenarios are labelled source: synthetic and do not claim physical
 Polaris or camera support.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Scenario definitions
-ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
+ASTRO_SCENARIOS: dict[str, dict[str, Any]] = {
     "startup": {
         "id": "astro-startup",
         "version": 1,
@@ -18,7 +18,15 @@ ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
         "status": "synthetic",
         "description": "Verify the Astro WebUI loads and initializes with default state",
         "steps": [
-            {"action": "get_state", "expect": {"mount_status": "idle", "camera_ready": False, "tracking": False, "rate_control": "unavailable"}},
+            {
+                "action": "get_state",
+                "expect": {
+                    "mount_status": "idle",
+                    "camera_ready": False,
+                    "tracking": False,
+                    "rate_control": "unavailable",
+                },
+            },
         ],
     },
     "camera-not-ready": {
@@ -30,7 +38,11 @@ ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
         "description": "Verify capture is rejected when camera is not ready",
         "steps": [
             {"action": "get_state", "expect": {"camera_ready": False}},
-            {"action": "capture", "expect_ok": False, "expect_error": "camera not ready"},
+            {
+                "action": "capture",
+                "expect_ok": False,
+                "expect_error": "camera not ready",
+            },
         ],
     },
     "capture-publication": {
@@ -54,7 +66,12 @@ ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
         "status": "synthetic",
         "description": "Verify a valid solve returns ok with confidence",
         "steps": [
-            {"action": "solve", "image_id": "valid_image", "expect_ok": True, "expect_field": "confidence"},
+            {
+                "action": "solve",
+                "image_id": "valid_image",
+                "expect_ok": True,
+                "expect_field": "confidence",
+            },
         ],
     },
     "solve-rejected": {
@@ -65,7 +82,12 @@ ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
         "status": "synthetic",
         "description": "Verify a rejected solve produces a visible reason and zero mount/EXIF actions",
         "steps": [
-            {"action": "solve", "image_id": "reject", "expect_ok": False, "expect_error": "solve rejected"},
+            {
+                "action": "solve",
+                "image_id": "reject",
+                "expect_ok": False,
+                "expect_error": "solve rejected",
+            },
             {"action": "get_state", "expect": {"mount_actions": 0, "exif_actions": 0}},
         ],
     },
@@ -92,7 +114,11 @@ ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
         "steps": [
             {"action": "get_state", "expect_field": "session_id"},
             {"action": "reset", "expect_ok": True},
-            {"action": "get_state", "expect_field": "session_id", "expect_changed": True},
+            {
+                "action": "get_state",
+                "expect_field": "session_id",
+                "expect_changed": True,
+            },
         ],
     },
     "exif-opt-in": {
@@ -120,7 +146,7 @@ ASTRO_SCENARIOS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_scenario(scenario_id: str) -> Optional[Dict[str, Any]]:
+def get_scenario(scenario_id: str) -> dict[str, Any] | None:
     """Get a scenario by ID.
 
     Args:
@@ -129,10 +155,19 @@ def get_scenario(scenario_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Scenario dict or None if not found
     """
-    return ASTRO_SCENARIOS.get(scenario_id)
+    if scenario_id in ASTRO_SCENARIOS:
+        return ASTRO_SCENARIOS[scenario_id]
+    return next(
+        (
+            scenario
+            for scenario in ASTRO_SCENARIOS.values()
+            if scenario.get("id") == scenario_id
+        ),
+        None,
+    )
 
 
-def list_scenarios() -> List[str]:
+def list_scenarios() -> list[str]:
     """List all scenario IDs.
 
     Returns:
@@ -141,7 +176,9 @@ def list_scenarios() -> List[str]:
     return list(ASTRO_SCENARIOS.keys())
 
 
-def validate_scenario_result(scenario_id: str, results: List[Dict[str, Any]]) -> List[str]:
+def validate_scenario_result(
+    scenario_id: str, results: list[dict[str, Any]]
+) -> list[str]:
     """Validate scenario execution results against expected outcomes.
 
     Args:
@@ -159,12 +196,10 @@ def validate_scenario_result(scenario_id: str, results: List[Dict[str, Any]]) ->
     steps = scenario.get("steps", [])
 
     if len(results) != len(steps):
-        errors.append(
-            f"Expected {len(steps)} steps, got {len(results)}"
-        )
+        errors.append(f"Expected {len(steps)} steps, got {len(results)}")
         return errors
 
-    for i, (step, result) in enumerate(zip(steps, results)):
+    for i, (step, result) in enumerate(zip(steps, results, strict=True)):
         step_action = step.get("action", "")
 
         # Check expect_ok

@@ -12,21 +12,22 @@ protocol scenario engine or runtime verifier.
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from .scenarios import ASTRO_SCENARIOS, get_scenario, validate_scenario_result
 from .compatibility import generate_compatibility_report
-
+from .scenarios import ASTRO_SCENARIOS, get_scenario
 
 # Asset directory. Ships inside the wheel at polaris_harness/_data/astro_assets
 # (see pyproject force-include); the repository layout is only a development
 # fallback, because a site-packages install has no tests/ directory.
 _PACKAGED_ASSETS = Path(__file__).parent.parent / "_data" / "astro_assets"
-_REPO_ASSETS = Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "astro"
+_REPO_ASSETS = (
+    Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "astro"
+)
 
 
 def assets_dir() -> Path:
@@ -51,7 +52,7 @@ def assets_dir() -> Path:
     )
 
 
-def load_asset_manifest() -> Dict[str, Any]:
+def load_asset_manifest() -> dict[str, Any]:
     """Read the asset provenance manifest.
 
     Returns:
@@ -66,7 +67,7 @@ def load_asset_manifest() -> Dict[str, Any]:
         return json.load(f)
 
 
-def compute_asset_hashes(manifest: Dict[str, Any]) -> Dict[str, Optional[str]]:
+def compute_asset_hashes(manifest: dict[str, Any]) -> dict[str, str | None]:
     """Hash every asset named in the manifest.
 
     Args:
@@ -76,7 +77,7 @@ def compute_asset_hashes(manifest: Dict[str, Any]) -> Dict[str, Optional[str]]:
         Asset name to SHA-256, or None where the file is missing
     """
     base = assets_dir()
-    hashes: Dict[str, Optional[str]] = {}
+    hashes: dict[str, str | None] = {}
     for name in manifest.get("assets", {}):
         asset_path = base / name
         if asset_path.exists():
@@ -110,6 +111,13 @@ def create_app() -> Flask:
         "solve_count": 0,
         "goto_count": 0,
         "last_error": None,
+        "exif_enabled": False,
+        "location": {
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "altitude_m": 0.0,
+            "source": "synthetic",
+        },
     }
 
     # ------------------------------------------------------------------
@@ -131,11 +139,13 @@ def create_app() -> Flask:
         actual_hash = asset_hashes.get(filename)
 
         if actual_hash != expected_hash:
-            return jsonify({
-                "error": f"Asset hash mismatch for {filename}",
-                "expected": expected_hash,
-                "actual": actual_hash,
-            }), 500
+            return jsonify(
+                {
+                    "error": f"Asset hash mismatch for {filename}",
+                    "expected": expected_hash,
+                    "actual": actual_hash,
+                }
+            ), 500
 
         return send_from_directory(asset_dir, filename)
 
@@ -148,21 +158,63 @@ def create_app() -> Flask:
     # Synthetic Astro API routes
     # ------------------------------------------------------------------
 
+    @app.route("/api/astro/location", methods=["GET"])
+    def astro_location():
+        """Return the bounded synthetic location used by the harness."""
+        return jsonify(
+            {
+                "ok": True,
+                "location": dict(app.config["ASTRO_STATE"]["location"]),
+                "source": "synthetic",
+                "dry_run": True,
+            }
+        )
+
     @app.route("/api/astro/state", methods=["GET"])
     def astro_state():
         """Return current synthetic camera/mount state."""
-        return jsonify({
-            "session_id": app.config["ASTRO_STATE"]["session_id"],
-            "mount_status": app.config["ASTRO_STATE"]["mount_status"],
-            "camera_ready": app.config["ASTRO_STATE"]["camera_ready"],
-            "tracking": app.config["ASTRO_STATE"]["tracking"],
-            "rate_control": app.config["ASTRO_STATE"]["rate_control"],
-            "capture_count": app.config["ASTRO_STATE"]["capture_count"],
-            "solve_count": app.config["ASTRO_STATE"]["solve_count"],
-            "goto_count": app.config["ASTRO_STATE"]["goto_count"],
-            "last_error": app.config["ASTRO_STATE"]["last_error"],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        return jsonify(
+            {
+                "session_id": app.config["ASTRO_STATE"]["session_id"],
+                "mount_status": app.config["ASTRO_STATE"]["mount_status"],
+                "camera_ready": app.config["ASTRO_STATE"]["camera_ready"],
+                "tracking": app.config["ASTRO_STATE"]["tracking"],
+                "rate_control": app.config["ASTRO_STATE"]["rate_control"],
+                "capture_count": app.config["ASTRO_STATE"]["capture_count"],
+                "solve_count": app.config["ASTRO_STATE"]["solve_count"],
+                "goto_count": app.config["ASTRO_STATE"]["goto_count"],
+                "last_error": app.config["ASTRO_STATE"]["last_error"],
+                "exif_enabled": app.config["ASTRO_STATE"]["exif_enabled"],
+                "location": dict(app.config["ASTRO_STATE"]["location"]),
+                "source": "synthetic",
+                "dry_run": True,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    @app.route("/api/astro/camera-ready", methods=["POST"])
+    def astro_camera_ready():
+        """Set synthetic camera readiness for a disposable UI session."""
+        data = request.get_json(silent=True) or {}
+        ready = data.get("ready", True)
+        if not isinstance(ready, bool):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "ready must be boolean",
+                    "action": "camera-ready",
+                    "dry_run": True,
+                }
+            ), 400
+        app.config["ASTRO_STATE"]["camera_ready"] = ready
+        return jsonify(
+            {
+                "ok": True,
+                "action": "camera-ready",
+                "camera_ready": ready,
+                "dry_run": True,
+            }
+        )
 
     @app.route("/api/astro/capture", methods=["POST"])
     def astro_capture():
@@ -173,34 +225,42 @@ def create_app() -> Flask:
 
         # Validate inputs
         if exposure_ms <= 0:
-            return jsonify({
-                "ok": False,
-                "error": "exposure_ms must be positive",
-                "action": "capture",
-            }), 400
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "exposure_ms must be positive",
+                    "action": "capture",
+                    "dry_run": True,
+                }
+            ), 400
 
         if not app.config["ASTRO_STATE"]["camera_ready"]:
-            return jsonify({
-                "ok": False,
-                "error": "camera not ready",
-                "action": "capture",
-                "mount_status": app.config["ASTRO_STATE"]["mount_status"],
-            }), 409
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "camera not ready",
+                    "action": "capture",
+                    "mount_status": app.config["ASTRO_STATE"]["mount_status"],
+                    "dry_run": True,
+                }
+            ), 409
 
         # Dry-run capture
         app.config["ASTRO_STATE"]["capture_count"] += 1
         app.config["ASTRO_STATE"]["mount_status"] = "capturing"
         app.config["ASTRO_STATE"]["last_error"] = None
 
-        return jsonify({
-            "ok": True,
-            "action": "capture",
-            "exposure_ms": exposure_ms,
-            "iso": iso,
-            "capture_id": f"cap_{app.config["ASTRO_STATE"]['capture_count']:04d}",
-            "mount_status": app.config["ASTRO_STATE"]["mount_status"],
-            "dry_run": True,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "action": "capture",
+                "exposure_ms": exposure_ms,
+                "iso": iso,
+                "capture_id": f"cap_{app.config['ASTRO_STATE']['capture_count']:04d}",
+                "mount_status": app.config["ASTRO_STATE"]["mount_status"],
+                "dry_run": True,
+            }
+        )
 
     @app.route("/api/astro/solve", methods=["POST"])
     def astro_solve():
@@ -210,31 +270,37 @@ def create_app() -> Flask:
 
         # Simulate solve result based on image_id
         if image_id == "reject" or image_id == "ambiguous":
-            app.config["ASTRO_STATE"]["last_error"] = f"solve rejected for image: {image_id}"
-            return jsonify({
-                "ok": False,
-                "action": "solve",
-                "image_id": image_id,
-                "error": f"solve rejected: insufficient stars in {image_id}",
-                "mount_actions": 0,
-                "exif_actions": 0,
-                "dry_run": True,
-            }), 200
+            app.config["ASTRO_STATE"]["last_error"] = (
+                f"solve rejected for image: {image_id}"
+            )
+            return jsonify(
+                {
+                    "ok": False,
+                    "action": "solve",
+                    "image_id": image_id,
+                    "error": f"solve rejected: insufficient stars in {image_id}",
+                    "mount_actions": 0,
+                    "exif_actions": 0,
+                    "dry_run": True,
+                }
+            ), 200
 
         app.config["ASTRO_STATE"]["solve_count"] += 1
         app.config["ASTRO_STATE"]["mount_status"] = "solved"
 
-        return jsonify({
-            "ok": True,
-            "action": "solve",
-            "image_id": image_id,
-            "ra": 0.0,
-            "dec": 0.0,
-            "confidence": 0.95,
-            "mount_actions": 0,
-            "exif_actions": 0,
-            "dry_run": True,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "action": "solve",
+                "image_id": image_id,
+                "ra": 0.0,
+                "dec": 0.0,
+                "confidence": 0.95,
+                "mount_actions": 0,
+                "exif_actions": 0,
+                "dry_run": True,
+            }
+        )
 
     @app.route("/api/astro/goto", methods=["POST"])
     def astro_goto():
@@ -244,23 +310,28 @@ def create_app() -> Flask:
         dec = data.get("dec", 0.0)
 
         if not app.config["ASTRO_STATE"]["camera_ready"]:
-            return jsonify({
-                "ok": False,
-                "error": "camera not ready",
-                "action": "goto",
-            }), 409
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "camera not ready",
+                    "action": "goto",
+                    "dry_run": True,
+                }
+            ), 409
 
         app.config["ASTRO_STATE"]["goto_count"] += 1
         app.config["ASTRO_STATE"]["mount_status"] = "slewing"
 
-        return jsonify({
-            "ok": True,
-            "action": "goto",
-            "ra": ra,
-            "dec": dec,
-            "mount_status": app.config["ASTRO_STATE"]["mount_status"],
-            "dry_run": True,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "action": "goto",
+                "ra": ra,
+                "dec": dec,
+                "mount_status": app.config["ASTRO_STATE"]["mount_status"],
+                "dry_run": True,
+            }
+        )
 
     @app.route("/api/astro/tracking", methods=["POST"])
     def astro_tracking():
@@ -271,37 +342,53 @@ def create_app() -> Flask:
         app.config["ASTRO_STATE"]["tracking"] = enable
         app.config["ASTRO_STATE"]["mount_status"] = "tracking" if enable else "idle"
 
-        return jsonify({
-            "ok": True,
-            "action": "tracking",
-            "enable": enable,
-            "mount_status": app.config["ASTRO_STATE"]["mount_status"],
-            "dry_run": True,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "action": "tracking",
+                "enable": enable,
+                "mount_status": app.config["ASTRO_STATE"]["mount_status"],
+                "dry_run": True,
+            }
+        )
 
     @app.route("/api/astro/exif", methods=["POST"])
     def astro_exif():
         """Synthetic EXIF opt-in (dry-run only)."""
         data = request.get_json(silent=True) or {}
         enable = data.get("enable", True)
+        if not isinstance(enable, bool):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "enable must be boolean",
+                    "action": "exif",
+                    "dry_run": True,
+                }
+            ), 400
 
-        return jsonify({
-            "ok": True,
-            "action": "exif",
-            "enable": enable,
-            "dry_run": True,
-        })
+        app.config["ASTRO_STATE"]["exif_enabled"] = enable
+        return jsonify(
+            {
+                "ok": True,
+                "action": "exif",
+                "enable": enable,
+                "dry_run": True,
+            }
+        )
 
     @app.route("/api/astro/rate-control", methods=["POST"])
     def astro_rate_control():
         """Rate control — explicitly unavailable unless separately qualified."""
-        return jsonify({
-            "ok": False,
-            "action": "rate_control",
-            "error": "rate control unavailable",
-            "reason": "no separately qualified contract supplied",
-            "dry_run": True,
-        }), 403
+        return jsonify(
+            {
+                "ok": False,
+                "action": "rate_control",
+                "error": "rate control unavailable",
+                "reason": "no separately qualified contract supplied",
+                "dry_run": True,
+            }
+        ), 403
 
     @app.route("/api/astro/reset", methods=["POST"])
     def astro_reset():
@@ -315,13 +402,78 @@ def create_app() -> Flask:
         app.config["ASTRO_STATE"]["solve_count"] = 0
         app.config["ASTRO_STATE"]["goto_count"] = 0
         app.config["ASTRO_STATE"]["last_error"] = None
+        app.config["ASTRO_STATE"]["exif_enabled"] = False
 
-        return jsonify({
-            "ok": True,
-            "action": "reset",
-            "session_id": app.config["ASTRO_STATE"]["session_id"],
-            "dry_run": True,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "action": "reset",
+                "session_id": app.config["ASTRO_STATE"]["session_id"],
+                "dry_run": True,
+            }
+        )
+
+    @app.route("/api/astro/scenarios", methods=["GET"])
+    def astro_scenarios():
+        """Return the schema-backed synthetic scenario catalogue."""
+        return jsonify(
+            {
+                "source": "synthetic",
+                "dry_run": True,
+                "scenarios": list(ASTRO_SCENARIOS.values()),
+            }
+        )
+
+    @app.route("/api/astro/scenarios/<scenario_id>", methods=["GET"])
+    def astro_scenario(scenario_id: str):
+        """Return one schema-backed synthetic scenario definition."""
+        scenario = get_scenario(scenario_id)
+        if scenario is None:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": f"unknown synthetic scenario: {scenario_id}",
+                    "source": "synthetic",
+                    "dry_run": True,
+                }
+            ), 404
+        return jsonify(scenario)
+
+    @app.route("/api/astro/diagnostics", methods=["GET"])
+    def astro_diagnostics():
+        """Return bounded, read-only synthetic diagnostics for the SPA."""
+        compatibility = generate_compatibility_report(app)
+        asset_hashes = compute_asset_hashes(load_asset_manifest())
+        return jsonify(
+            {
+                "ok": True,
+                "source": "synthetic",
+                "dry_run": True,
+                "session_id": app.config["ASTRO_STATE"]["session_id"],
+                "state": {
+                    "capture_count": app.config["ASTRO_STATE"]["capture_count"],
+                    "solve_count": app.config["ASTRO_STATE"]["solve_count"],
+                    "goto_count": app.config["ASTRO_STATE"]["goto_count"],
+                    "exif_enabled": app.config["ASTRO_STATE"]["exif_enabled"],
+                    "rate_control": app.config["ASTRO_STATE"]["rate_control"],
+                },
+                "assets": {
+                    "manifest_present": all(
+                        digest is not None for digest in asset_hashes.values()
+                    ),
+                    "hashes": asset_hashes,
+                },
+                "compatibility": {
+                    "all_documented_served": compatibility["all_documented_served"],
+                    "missing": compatibility["missing"],
+                    "extra": compatibility["extra"],
+                },
+                "limitations": [
+                    "synthetic only; no physical Polaris or camera contact",
+                    "rate control unavailable until separately qualified",
+                ],
+            }
+        )
 
     # ------------------------------------------------------------------
     # Compatibility report
@@ -335,7 +487,9 @@ def create_app() -> Flask:
     return app
 
 
-def run_server(host: str = "127.0.0.1", port: int = 0, profile: str = "synthetic") -> int:
+def run_server(
+    host: str = "127.0.0.1", port: int = 0, profile: str = "synthetic"
+) -> int:
     """Run the Astro WebUI server.
 
     Args:
@@ -354,8 +508,10 @@ def run_server(host: str = "127.0.0.1", port: int = 0, profile: str = "synthetic
     print(f"Starting Astro WebUI server on {host}:{port}")
     print(f"Profile: {profile}")
     print(f"Assets: {assets_dir()}")
-    print(f"Asset hashes verified: "
-          f"{all(h is not None for h in compute_asset_hashes(load_asset_manifest()).values())}")
+    print(
+        f"Asset hashes verified: "
+        f"{all(h is not None for h in compute_asset_hashes(load_asset_manifest()).values())}"
+    )
 
     app.run(host=host, port=port, debug=False)
     return 0

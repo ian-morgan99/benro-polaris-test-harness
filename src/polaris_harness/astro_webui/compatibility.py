@@ -5,11 +5,13 @@ Compares the served API routes against the documented synthetic Astro API
 surface and reports missing or extra endpoints.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 # Documented synthetic Astro API surface
-DOCUMENTED_ROUTES: Dict[str, List[str]] = {
+DOCUMENTED_ROUTES: dict[str, list[str]] = {
     "GET /api/astro/state": ["Read current camera/mount state"],
+    "GET /api/astro/location": ["Read synthetic location"],
+    "POST /api/astro/camera-ready": ["Set synthetic camera readiness"],
     "POST /api/astro/capture": ["Start a synthetic capture (dry-run)"],
     "POST /api/astro/solve": ["Run synthetic platesolve (dry-run)"],
     "POST /api/astro/goto": ["Slew to RA/Dec target (dry-run)"],
@@ -17,12 +19,15 @@ DOCUMENTED_ROUTES: Dict[str, List[str]] = {
     "POST /api/astro/exif": ["Opt in/out of EXIF (dry-run)"],
     "POST /api/astro/rate-control": ["Rate control — always unavailable (dry-run)"],
     "POST /api/astro/reset": ["Reset synthetic state (test helper)"],
+    "GET /api/astro/scenarios": ["Return synthetic scenario catalogue"],
+    "GET /api/astro/scenarios/<scenario_id>": ["Return one synthetic scenario"],
+    "GET /api/astro/diagnostics": ["Return bounded synthetic diagnostics"],
     "GET /api/astro/manifest": ["Return asset provenance manifest"],
     "GET /api/astro/compatibility": ["Return route compatibility report"],
 }
 
 
-def generate_compatibility_report(app) -> Dict[str, Any]:
+def generate_compatibility_report(app) -> dict[str, Any]:
     """Generate a compatibility report comparing served routes to documented API.
 
     Args:
@@ -31,7 +36,7 @@ def generate_compatibility_report(app) -> Dict[str, Any]:
     Returns:
         Compatibility report dict
     """
-    served_routes: Dict[str, List[str]] = {}
+    served_routes: dict[str, list[str]] = {}
 
     for rule in app.url_map.iter_rules():
         methods = sorted(rule.methods - {"HEAD", "OPTIONS"})
