@@ -1,0 +1,24 @@
+schema_version: "1"
+id: preview-repeated-jpeg-v1
+title: Preview producer emits repeated valid JPEG frames
+version: 1
+source: synthetic
+status: synthetic
+source_issue: ian-morgan99/benro-polaris-test-harness#3
+initial_state: idle
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 2000
+endpoints:
+  preview:
+    transport: tcp
+    framing:
+      type: length_prefixed
+    bind:
+      host: 127.0.0.1
+      port: 0
+    failure_mode: repeated_jpeg
+    repeat_count: 2
+assertions:
+  - repeated_frames_are_not_collapsed

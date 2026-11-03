@@ -83,6 +83,54 @@
               }
             }
           }
+        },
+        "preview": {
+          "type": "object",
+          "required": ["transport", "framing", "bind", "failure_mode"],
+          "properties": {
+            "transport": {
+              "type": "string",
+              "const": "tcp",
+              "description": "Synthetic preview transport"
+            },
+            "framing": {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "length_prefixed",
+                  "description": "Four-byte big-endian media length envelope"
+                }
+              },
+              "additionalProperties": false
+            },
+            "bind": {
+              "type": "object",
+              "required": ["host", "port"],
+              "properties": {
+                "host": {"type": "string"},
+                "port": {"type": "integer", "minimum": 0, "maximum": 65535}
+              },
+              "additionalProperties": false
+            },
+            "failure_mode": {
+              "type": "string",
+              "enum": [
+                "listener_absent",
+                "accepted_closed",
+                "accepted_no_data",
+                "empty_frame",
+                "invalid_frame",
+                "delayed_jpeg",
+                "repeated_jpeg"
+              ]
+            },
+            "delay_ms": {"type": "integer", "minimum": 0},
+            "repeat_count": {"type": "integer", "minimum": 1},
+            "idle_timeout_ms": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
         }
       }
     },

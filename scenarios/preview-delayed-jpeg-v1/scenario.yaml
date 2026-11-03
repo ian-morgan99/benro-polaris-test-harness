@@ -1,0 +1,24 @@
+schema_version: "1"
+id: preview-delayed-jpeg-v1
+title: Preview producer emits a delayed valid JPEG
+version: 1
+source: synthetic
+status: synthetic
+source_issue: ian-morgan99/benro-polaris-test-harness#3
+initial_state: idle
+limits:
+  max_frame_bytes: 65536
+  max_connections: 1
+  scenario_timeout_ms: 2000
+endpoints:
+  preview:
+    transport: tcp
+    framing:
+      type: length_prefixed
+    bind:
+      host: 127.0.0.1
+      port: 0
+    failure_mode: delayed_jpeg
+    delay_ms: 50
+assertions:
+  - delayed_valid_jpeg_is_admitted

@@ -43,6 +43,7 @@ It should provide:
 
 - deterministic TCP protocol endpoints matching observed Polaris request/response behaviour;
 - preview-stream endpoints and controlled timing/failure modes;
+- a synthetic preview producer/listener contract for issue #3; see [docs/PREVIEW-HARNESS.md](docs/PREVIEW-HARNESS.md);
 - scripted camera personalities based on recorded physical evidence;
 - trace replay from sanitised real-device captures;
 - fault injection for known runtime and protocol failures;

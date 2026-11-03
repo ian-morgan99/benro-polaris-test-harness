@@ -93,6 +93,15 @@ from .runtime import (
 )
 from .install_simulation import InstallObservation, InstallSimulator, InstallState
 from .issue_forms import validate_pin_request_provenance
+from .preview import (
+    PreviewMode,
+    PreviewOutcome,
+    PreviewRead,
+    PreviewServer,
+    is_jpeg,
+    read_preview_frame,
+    synthetic_jpeg,
+)
 from .ledger import (
     ExecutionLedger,
     LedgerEntry,
@@ -205,6 +214,13 @@ __all__ = [
     "validate_personality_file",
     "validate_runtime_manifest_file",
     "validate_pin_request_provenance",
+    "PreviewMode",
+    "PreviewOutcome",
+    "PreviewRead",
+    "PreviewServer",
+    "is_jpeg",
+    "read_preview_frame",
+    "synthetic_jpeg",
     "RuntimeVerifier",
     "RuntimeVerifierManager",
     "get_runtime_verifier_manager",
