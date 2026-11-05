@@ -339,6 +339,7 @@ class LoadRecord:
     relocations_resolved: int = 0
     relocations_unresolved: int = 0
     instructions_executed: int = 0
+    stub_calls: List[Dict[str, Any]] = field(default_factory=list)
     result: str = LoadResult.ERROR.value
     error_message: Optional[str] = None
     unsupported_relocation_offset: Optional[int] = None
@@ -562,6 +563,7 @@ class DynamicLoader:
         max_instructions: int = 100000,
         timeout_ms: int = 10000,
         enable_fpu: bool = True,
+        stub_entries: Optional[List[dict]] = None,
     ):
         self.binary_path = Path(binary_path)
         self.binary_data = self.binary_path.read_bytes()
@@ -573,6 +575,7 @@ class DynamicLoader:
         self.max_instructions = max_instructions
         self.timeout_ms = timeout_ms
         self.enable_fpu = enable_fpu
+        self.stub_entries = stub_entries or []
 
         self.header = _read_elf_header(self.binary_data)
         self.phdrs = _read_program_headers(self.binary_data, self.header)
@@ -651,6 +654,10 @@ class DynamicLoader:
         # point even when the full runtime environment isn't yet modeled.
         self._uc.mem_map(0x3E000000, 0x1000000,
                          UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC)
+
+        # Apply memory patches from sidecar (restore .got/.data contents
+        # from the retained source binary)
+        self._apply_memory_patches()
 
         # Push argc, argv
         stack_top = self.stack_address + self.stack_size
@@ -740,6 +747,16 @@ class DynamicLoader:
         return_value = handler(function_name, arguments, register_snapshot)
         uc.reg_write(UC_ARM_REG_R0, return_value)
 
+        # Record the stub call for observability
+        import time
+        self.record.stub_calls.append({
+            "stub_name": stub_name,
+            "function_name": function_name,
+            "arguments": list(arguments),
+            "return_value": return_value,
+            "timestamp_ms": int(time.time() * 1000) - (self._start_time_ms or 0),
+        })
+
     def _hook_mem_invalid(self, uc, access, address: int, size: int,
                           value: int, user_data) -> bool:
         self._fault_access_address = address
@@ -806,6 +823,174 @@ class DynamicLoader:
         except UcError:
             pass
 
+    def _apply_memory_patches(self) -> None:
+        """Apply memory patches from sidecar to restore .got/.data contents.
+
+        Reads memory_patches from the fixture sidecar JSON and copies bytes
+        from the retained source binary into mapped memory. This restores
+        global contents that were outside the extracted region window.
+        """
+        sidecar_path = self.binary_path.with_suffix(".json")
+        if not sidecar_path.exists():
+            sidecar_path = Path("tests/fixtures/arm") / (self.binary_path.stem + ".json")
+        if not sidecar_path.exists():
+            return
+
+        try:
+            import json
+            with open(sidecar_path) as f:
+                meta = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        prov = meta.get("provenance", {})
+        if not isinstance(prov, dict):
+            return
+
+        patches = prov.get("memory_patches", [])
+        if not isinstance(patches, list):
+            return
+
+        # Find the source binary path from sidecar provenance
+        source_path = prov.get("source_binary_retained_at")
+        if not source_path:
+            return
+        # The sidecar records a relative path like
+        # "PrivateResearch firmware-packets/.../pgphoto.stage2ondisk".
+        # Resolve it relative to POLARIS_FIRMWARE_ROOT env var if set.
+        firmware_root = os.environ.get("POLARIS_FIRMWARE_ROOT")
+        if firmware_root:
+            source_path = Path(firmware_root) / source_path
+        else:
+            source_path = Path(source_path)
+        if not source_path.exists():
+            return
+
+        for patch in patches:
+            if not isinstance(patch, dict):
+                continue
+            address = patch.get("address")
+            source_offset = patch.get("source_offset")
+            size = patch.get("size")
+            if address is None or source_offset is None or size is None:
+                continue
+            if isinstance(address, str):
+                try:
+                    address = int(address, 0)
+                except ValueError:
+                    continue
+            if isinstance(source_offset, str):
+                try:
+                    source_offset = int(source_offset, 0)
+                except ValueError:
+                    continue
+            if isinstance(size, str):
+                try:
+                    size = int(size, 0)
+                except ValueError:
+                    continue
+
+            # Verify the patch lands in mapped memory
+            try:
+                existing = bytes(self._uc.mem_read(address, size))
+            except UcError:
+                continue
+
+            try:
+                with open(source_path, "rb") as f:
+                    f.seek(source_offset)
+                    payload = f.read(size)
+            except OSError:
+                continue
+
+            if len(payload) != size:
+                continue
+
+            self._uc.mem_write(address, payload)
+
+    # ------------------------------------------------------------------
+    # Stub registration
+    # ------------------------------------------------------------------
+    def _register_default_stubs(self) -> None:
+        """Register default stub handlers for all boundaries.
+
+        These are clearly marked as assumptions, not evidence of real
+        library behavior. They record calls and return safe defaults.
+        """
+        def camera_stub(function_name: str, arguments: List[Any],
+                        register_snapshot: Dict[str, int]) -> Any:
+            logger.debug("Camera stub: %s(%s)", function_name, arguments)
+            return 0
+
+        def libgphoto_stub(function_name: str, arguments: List[Any],
+                           register_snapshot: Dict[str, int]) -> Any:
+            logger.debug("libgphoto stub: %s(%s)", function_name, arguments)
+            return 0
+
+        def os_stub(function_name: str, arguments: List[Any],
+                    register_snapshot: Dict[str, int]) -> Any:
+            logger.debug("OS stub: %s(%s)", function_name, arguments)
+            return 0
+
+        def timer_stub(function_name: str, arguments: List[Any],
+                       register_snapshot: Dict[str, int]) -> Any:
+            logger.debug("Timer stub: %s(%s)", function_name, arguments)
+            return 0
+
+        def callback_stub(function_name: str, arguments: List[Any],
+                          register_snapshot: Dict[str, int]) -> Any:
+            logger.debug("Callback stub: %s(%s)", function_name, arguments)
+            return 0
+
+        self.register_stub("camera", camera_stub)
+        self.register_stub("libgphoto", libgphoto_stub)
+        self.register_stub("os", os_stub)
+        self.register_stub("timer", timer_stub)
+        self.register_stub("callback", callback_stub)
+
+    def _register_sidecar_stub_entries(self) -> None:
+        """Register stub entries from the fixture sidecar.
+
+        Reads stub_entries from self.stub_entries (passed at construction)
+        and registers each as a stub entry address so external calls reach
+        stubs instead of executing unmapped code. Addresses are coerced from
+        hex strings.
+        """
+        stub_entries = self.stub_entries
+        if not stub_entries:
+            return
+
+        for entry in stub_entries:
+            if not isinstance(entry, dict):
+                continue
+            address = entry.get("address")
+            stub_name = entry.get("stub_name")
+            function_name = entry.get("function_name")
+            model = entry.get("model", "call-site")
+
+            if address is None or stub_name is None:
+                continue
+
+            # Coerce hex string to int
+            if isinstance(address, str):
+                try:
+                    address = int(address, 0)
+                except ValueError:
+                    continue
+
+            # Only register if the stub handler exists
+            if stub_name not in self._stub_registry:
+                continue
+
+            try:
+                self.register_stub_entry(
+                    stub_name, address,
+                    function_name=function_name,
+                    model=model,
+                )
+            except (KeyError, ValueError):
+                continue
+
     # ------------------------------------------------------------------
     # Main run
     # ------------------------------------------------------------------
@@ -845,12 +1030,19 @@ class DynamicLoader:
         # Add synthetic system library stubs (clearly marked as assumptions)
         self._symbol_map.update(_SYNTHETIC_SYMBOLS)
 
+        # Register default stub handlers for all boundaries
+        self._register_default_stubs()
+
         try:
             self._apply_relocations(relocs)
         except ValueError as exc:
             self.record.result = LoadResult.ERROR.value
             self.record.error_message = str(exc)
             return self.record
+
+        # Register stub entries from sidecar (if available) so external calls
+        # reach stubs instead of executing unmapped code
+        self._register_sidecar_stub_entries()
 
         # Register hooks
         self._uc.hook_add(UC_HOOK_CODE, self._hook_code)
@@ -951,11 +1143,31 @@ def load_and_run_pgphoto(
             synthetic=True,
         ))
 
+    # Load stub entries from sidecar JSON if available
+    sidecar_path = binary_path.with_suffix(".json")
+    if not sidecar_path.exists():
+        # Also check the standard test fixtures location
+        sidecar_path = Path("tests/fixtures/arm") / (binary_path.stem + ".json")
+    stub_entries = []
+    if sidecar_path.exists():
+        try:
+            import json
+            with open(sidecar_path) as f:
+                meta = json.load(f)
+            prov = meta.get("provenance", {})
+            if isinstance(prov, dict):
+                entries = prov.get("stub_entries", [])
+                if isinstance(entries, list):
+                    stub_entries = [e for e in entries if isinstance(e, dict)]
+        except (json.JSONDecodeError, OSError):
+            pass
+
     loader = DynamicLoader(
         binary_path=binary_path,
         libraries=libraries,
         max_instructions=max_instructions,
         timeout_ms=timeout_ms,
         enable_fpu=True,
+        stub_entries=stub_entries,
     )
     return loader.run()
