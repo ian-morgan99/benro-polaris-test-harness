@@ -632,6 +632,12 @@ class DynamicLoader:
         self._uc.mem_map(self.stack_address, self.stack_size,
                          UC_PROT_READ | UC_PROT_WRITE)
 
+        # Map heap region above the stack for dynamic allocations
+        heap_address = self.stack_address - 0x200000  # 2 MB heap below stack
+        heap_size = 0x200000
+        self._uc.mem_map(heap_address, heap_size,
+                         UC_PROT_READ | UC_PROT_WRITE)
+
         # Map synthetic stub region (0x50000000+) for unresolved system
         # library symbols. These are clearly marked as assumptions, not
         # evidence of real library behavior.
