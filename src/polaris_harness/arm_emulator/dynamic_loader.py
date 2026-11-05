@@ -82,6 +82,7 @@ RELOC_TYPE_NAMES = {
 # Synthetic symbol stubs for system libraries we don't have retained.
 # These are clearly marked as assumptions, not evidence. Each maps a symbol
 # name to a synthetic address in a reserved range (0x50000000+).
+_SYNTHETIC_LIB_BASE = 0x50000000
 _SYNTHETIC_SYMBOLS = {
     # libc.so.6
     "signal": 0x50001000,
@@ -630,6 +631,13 @@ class DynamicLoader:
         # Map stack
         self._uc.mem_map(self.stack_address, self.stack_size,
                          UC_PROT_READ | UC_PROT_WRITE)
+
+        # Map synthetic stub region (0x50000000+) for unresolved system
+        # library symbols. These are clearly marked as assumptions, not
+        # evidence of real library behavior.
+        stub_region_size = 0x200000  # 2 MB for all synthetic stubs
+        self._uc.mem_map(_SYNTHETIC_LIB_BASE, stub_region_size,
+                         UC_PROT_READ | UC_PROT_EXEC)
 
         # Push argc, argv
         stack_top = self.stack_address + self.stack_size
