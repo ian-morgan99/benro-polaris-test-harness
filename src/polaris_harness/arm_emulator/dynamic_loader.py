@@ -645,6 +645,13 @@ class DynamicLoader:
         self._uc.mem_map(_SYNTHETIC_LIB_BASE, stub_region_size,
                          UC_PROT_READ | UC_PROT_EXEC)
 
+        # Map a large region at high addresses to catch computed branch
+        # targets that depend on uninitialized runtime state (heap, TLS,
+        # data sections). This lets us observe execution beyond the entry
+        # point even when the full runtime environment isn't yet modeled.
+        self._uc.mem_map(0x3E000000, 0x1000000,
+                         UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC)
+
         # Push argc, argv
         stack_top = self.stack_address + self.stack_size
         for arg in reversed(self.entry_arguments):
