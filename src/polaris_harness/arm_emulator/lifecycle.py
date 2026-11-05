@@ -919,6 +919,11 @@ class Case5DeferredTimedCaptureCancelled(LifecycleScenario):
 class Case6NormalTimerExpiry(LifecycleScenario):
     """Normal timer expiry still issuing the intended capture."""
 
+    # stage2_region's wait loop at 0x101f78 tests `cmn r3,#0x34; beq 0x102204`
+    # against wait_and_handle_event's return. -52 (0x34 negated) is the
+    # publication/cancel route exit that terminates the loop.
+    event_return_value = -52
+
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
         profile.register_all(self.stub_registry)
@@ -974,6 +979,11 @@ class Case6NormalTimerExpiry(LifecycleScenario):
 class Case7CallbackOrderingRegisterPreservation(LifecycleScenario):
     """Callback ordering, stack/register preservation, widget pointer lifetime,
     caller-saved register clobbering."""
+
+    # stage2_region's wait loop at 0x101f78 tests `cmn r3,#0x34; beq 0x102204`
+    # against wait_and_handle_event's return. -52 (0x34 negated) is the
+    # publication/cancel route exit that terminates the loop.
+    event_return_value = -52
 
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
@@ -1065,6 +1075,11 @@ class Case8OutputPublicationCleanup(LifecycleScenario):
     expected_boundary_functions = (
         "publish_output", "signal_completion", "cleanup")
 
+    # stage2_region's wait loop at 0x101f78 tests `cmn r3,#0x34; beq 0x102204`
+    # against wait_and_handle_event's return. -52 (0x34 negated) is the
+    # publication/cancel route exit that terminates the loop.
+    event_return_value = -52
+
     def _setup_stubs(self) -> None:
         profile = create_default_profile()
         profile.register_all(self.stub_registry)
@@ -1143,6 +1158,11 @@ class Case9ManualNonBControl(LifecycleScenario):
 
     expected_boundary_functions = (
         "manual_dispatch", "non_b_capture", "shared_helper")
+
+    # stage2_region's wait loop at 0x101f78 tests `cmn r3,#0x34; beq 0x102204`
+    # against wait_and_handle_event's return. -52 (0x34 negated) is the
+    # publication/cancel route exit that terminates the loop.
+    event_return_value = -52
 
     def _setup_stubs(self) -> None:
         profile = create_strict_profile()

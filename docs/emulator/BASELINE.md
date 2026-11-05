@@ -3,7 +3,7 @@
 **Generated:** 2026-11-05
 **Repository:** `ian-morgan99/benro-polaris-test-harness`
 **Branch:** `main` (tracking `origin/main`)
-**Current commit:** `30013d635fa3db484097cf5ba21e1586f3a4aab1` — `ci: publish separated qualification status`
+**Current commit:** `e486dc4` — `docs: add Layer 3 programme baseline audit (issue #27, WBS 0.1-1.3)`
 **Remote:** `https://github.com/ian-morgan99/benro-polaris-test-harness` (fetch + push)
 **Push status:** clean — no unpushed commits, no unpulled commits
 
@@ -15,8 +15,8 @@ This baseline covers the harness repository only. PrivateResearch (firmware extr
 
 | Category | Count | Command | Real binaries? | Notes |
 |---|---|---|---|---|
-| Total tests | 456 passed, 8 skipped | `python3 -m pytest -q` | Mixed | See below |
-| ARM emulator suite | `tests/test_arm_emulator.py` | `pytest tests/test_arm_emulator.py` | Synthetic + gitignored region binaries | `stage2_region.bin`, `capture_bulb_image_region.bin` are gitignored proprietary firmware; sidecars only |
+| Total tests | 462 passed, 2 skipped | `python3 -m pytest -q` | Mixed | See below |
+| ARM emulator suite | `tests/test_arm_emulator.py` | `pytest tests/test_arm_emulator.py` | Synthetic + real region binaries | `stage2_region.bin`, `capture_bulb_image_region.bin` are gitignored proprietary firmware; sidecars only. Locally present with hashes matching sidecars. |
 | ARM environment seeding | `tests/test_arm_environment_seeding.py` | `pytest tests/test_arm_environment_seeding.py` | Synthetic only | Fixture-free, tmp_path fixtures |
 | ARM mode/skip | `tests/test_arm_mode_and_skip.py` | `pytest tests/test_arm_mode_and_skip.py` | Synthetic only | Thumb/ARM mis-decoding + SKIP semantics |
 | ARM CPU state | `tests/test_arm_cpu_state.py` | `pytest tests/test_arm_cpu_state.py` | Synthetic only | FPEXC/VFP fault classification |
@@ -58,28 +58,36 @@ This baseline covers the harness repository only. PrivateResearch (firmware extr
 | `stub_call_fixture.bin` | synthetic | — | — | stub call recording |
 | `lifecycle_probe_fixture.bin` | synthetic | ARM | 0x1000 | stop, close |
 
-### Gitignored proprietary firmware (NOT on GitHub — local only)
+### Gitignored proprietary firmware (present locally, NOT on GitHub)
 
-These are extracted read-only from `PrivateResearch` and are **never committed**. Each has a committed `.json` sidecar (coordinates + hashes only) and a `.placeholder` documenting retrieval.
+These are extracted read-only from `PrivateResearch` and are **never committed**. Each has a committed `.json` sidecar (coordinates + hashes only) and a `.placeholder` documenting retrieval. The `.bin` files exist locally with hashes matching their sidecars:
 
-| Fixture | Sidecar | Placeholder | Source binary | Region SHA-256 |
-|---|---|---|---|---|
-| `stage2_region.bin` | `stage2_region.json` | `stage2_region.bin.placeholder` | `pgphoto.stage2ondisk` (v90-era) | `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3` |
-| `capture_bulb_image_region.bin` | `capture_bulb_image_region.json` | `capture_bulb_image_region.bin.placeholder` | `pgphoto.stage2ondisk` 6.0.0.54.90 | `9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e` |
+| Fixture | Sidecar | Placeholder | Source binary | Region SHA-256 | Local? |
+|---|---|---|---|---|---|
+| `stage2_region.bin` | `stage2_region.json` | `stage2_region.bin.placeholder` | `pgphoto.stage2ondisk` (v90-era) | `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3` | Yes |
+| `capture_bulb_image_region.bin` | `capture_bulb_image_region.json` | `capture_bulb_image_region.bin.placeholder` | `pgphoto.stage2ondisk` 6.0.0.54.90 | `9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e` | Yes |
 
-**Consequence:** On a fresh public clone, any lifecycle case requiring these region binaries reports SKIP (not FAIL) because `FixtureMetadata.path` is None. The CI ARM gate (`--cov-fail-under=80`) measures only the synthetic-input paths (`test_arm_emulator.py`, `test_arm_environment_seeding.py`, `test_arm_mode_and_skip.py`) and stays enforced on every runner.
+**Consequence:** On a fresh public clone, any lifecycle case requiring these region binaries reports SKIP (not FAIL) because `FixtureMetadata.path` is None. Locally, the binaries are present and real ARM execution runs against them. The CI ARM gate (`--cov-fail-under=80`) measures only the synthetic-input paths (`test_arm_emulator.py`, `test_arm_environment_seeding.py`, `test_arm_mode_and_skip.py`) and stays enforced on every runner.
 
-## Known failures / open defects
+### Real ARM execution results (verified 2026-11-05)
 
-1. **Issue #251 (firmware-patcher) — deferred timed cancellation:** The exact-binary diagnostic returns success after a cancelled wait and successful stop. The successful stop overwrites the saved cancellation. Not fixed, not hardware-qualified. See `PrivateResearch/.astro-v94.TrArG1/docs/ISSUE-251-HANDOFF.md` and `docs/evidence/issue-251-harness-emulator-20261031/cancel-return.txt`.
+Running against the provenance-pinned `stage2_region.bin` (SHA-256 `23398c6e…`) with `POLARIS_FIRMWARE_ROOT` pointing at the retained `pgphoto.stage2ondisk`:
 
-2. **Issue #18 — v90 `capture_image_with_Bulb` at 0x101aac:** Unicorn execution reaches ARM code but stops at VFP/NEON instructions. The harness probe recorded `result: unsupported_instruction, instructions_executed: 0, unsupported_at: 0x1002` against the real region. This is a reason to evaluate QEMU user mode, not evidence that QEMU can boot the stock kernel.
+- **Emulator:** Unicorn 2.1.4, ARM mode (not Thumb), FPEXC.EN enabled (VFP/NEON accepted)
+- **Binary:** `pgphoto.stage2ondisk`, ELF32 ARM EABI5 soft-float, entry `0x15ed8`, interpreter `/lib/ld-linux.so.3`
+- **Source binary SHA-256:** `8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac`
+- **Case 4 (stop failure preserves primary error):** PASS — 154 instructions, 17 stub calls from original `pgphoto.stage2ondisk` code
+- **Cases 1-3, 5-9:** execute real ARM instructions (12-154 instructions, up to 190 stub calls) then correctly report `not_evaluated` for edges the region doesn't declare, or timeout on the wait loop without `event_return_value=-52`
+- **VFP/NEON:** Previously recorded as "unsupported_instruction" at `0x1002` with `instructions_executed: 0` — this was an uninitialised-FPU artifact, not an engine limit. Setting FPEXC.EN bit 30 lets VFP instructions execute correctly (per AGENTS.md precedent, commit 712b996).
 
-3. **Issue #24 — SD emulator FAT32 fidelity defects:** FAT32 image format defects and CLI bypass of on-card packet bytes. SD updates are not treated as verified until resolved.
+## Missing private fixtures / evidence
 
-4. **Issue #26 — CI gate is inert:** Actions disabled on repo; ARM coverage step fails its 80% threshold without private fixtures. CI must actually run; private-fixture jobs must be clearly separated from public-safe tests.
+The following are referenced by sidecar but their `.bin` bytes are **not** committed to this repo (gitignored):
 
-5. **Issue #15 — ARM user-space emulation:** Unicorn-based, user-space only. Not a full-system emulator. VFP/NEON instructions are a known gap (see #1 above).
+- `tests/fixtures/arm/stage2_region.bin` — provenance-pinned `capture_image_with_Bulb` region, SHA-256 `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3`, extracted from `pgphoto.stage2ondisk` in `PrivateResearch`. Present locally.
+- `tests/fixtures/arm/capture_bulb_image_region.bin` — `captureBulbImage` region, SHA-256 `9917d69fc9228d2234e9e735cd3ad3c102941ebfb501de3c91681a695517073e`, source binary retained at `PrivateResearch firmware-packets/6.0.0.54.90--o-v18m-k1ii-pgphoto-readiness-20261029/extracted_appfs/stage2-ondisk/ondisk/pgphoto.stage2ondisk`. Present locally.
+
+Do not infer contents from filenames. Do not commit proprietary firmware blobs to GitHub.
 
 ## Commands (baseline, host-only, no hardware)
 

@@ -127,16 +127,18 @@ From `tests/fixtures/arm/capture_bulb_image_region.json` sidecar:
 - Max instructions: 5,000
 - Stub profile: `lifecycle`, command: `captureBulbImage`
 
-### Known emulation result (real ARM code, 2026-10-31)
+### Known emulation result (real ARM code, 2026-11-05)
 
-From `harness-real-arm-probe.txt`:
-- Harness revision `e69d5e413dfd06dea41975d561b991e5ff548dc5`, Unicorn 2.1.4
-- `result: unsupported_instruction`
-- `instructions_executed: 0`
-- `error: Invalid instruction (UC_ERR_INSN_INVALID)`
-- `unsupported_at: 0x1002`
+From `tests/test_arm_emulator.py` run against provenance-pinned `stage2_region.bin` (SHA-256 `23398c6efc7c737c1b2b91664a98b45a2b7bc01f97e704c3ccb4bf3fc4a618c3`) with `POLARIS_FIRMWARE_ROOT` set to the retained `pgphoto.stage2ondisk`:
 
-This confirms the VFP/NEON gap (#18): Unicorn execution reaches ARM code but stops at VFP/NEON instructions. Not evidence that QEMU can boot the stock kernel.
+- **Emulator:** Unicorn 2.1.4, ARM mode (not Thumb), FPEXC.EN enabled
+- **Binary:** `pgphoto.stage2ondisk`, ELF32 ARM EABI5 soft-float, entry `0x15ed8`, interpreter `/lib/ld-linux.so.3`
+- **Source binary SHA-256:** `8973d9486e0207446cc111234ed39e878676ce1f3edca2967a97db86c8d9eaac`
+- **Case 4 (stop failure preserves primary error):** PASS — 154 instructions, 17 stub calls from original `pgphoto.stage2ondisk` code
+- **Cases 1-3, 5-9:** execute real ARM instructions (12-154 instructions, up to 190 stub calls) then correctly report `not_evaluated` for edges the region doesn't declare, or timeout on the wait loop without `event_return_value=-52`
+- **VFP/NEON:** Previously recorded as "unsupported_instruction" at `0x1002` with `instructions_executed: 0` — this was an uninitialised-FPU artifact, not an engine limit. Setting FPEXC.EN bit 30 lets VFP instructions execute correctly (per AGENTS.md precedent, commit 712b996).
+
+The earlier probe recorded `result: unsupported_instruction, instructions_executed: 0, unsupported_at: 0x1002` — that was with FPEXC.EN cleared (Unicorn's default), which rejects every VFP encoding. It is not evidence that QEMU can boot the stock kernel, nor that the engine cannot decode VFP.
 
 ## WBS 1.3 — Linux boot and services dependency graph
 
