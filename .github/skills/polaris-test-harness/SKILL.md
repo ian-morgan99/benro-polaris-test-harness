@@ -26,7 +26,7 @@ Interpret results using the ownership ladder:
 
 ```text
 harness PASS = consumer handles the recorded contract
-direct camera FAIL = candidate libgphoto2 issue
+exact direct driver reproduces the first failing PTP operation = candidate libgphoto2 issue
 direct PASS, Polaris-local FAIL = patcher/runtime issue
 direct and Polaris-local PASS, OpenPolaris FAIL = OpenPolaris issue
 ```
@@ -35,17 +35,19 @@ direct and Polaris-local PASS, OpenPolaris FAIL = OpenPolaris issue
 
 Keep transport, framing, matching, scenario state/actions, ledger, and runtime verification separated as described in `docs/ARCHITECTURE.md`. Exact matching is the default. TCP tests must cover split and coalesced frames when applicable; timing tests should use virtual time.
 
-Use the repository environment when present:
+From the repository root, confirm the selected Python environment can import the harness and has test dependencies. For a new isolated environment:
 
 ```bash
-.venv/bin/python -m pytest -q
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/polaris-harness --help
+.venv/bin/python -m pytest -q
 ```
 
-Otherwise follow the documented isolated setup. Validate every new scenario, evidence, personality, or runtime manifest through the public validator or CLI, then run focused tests and the complete suite.
+For an offline source checkout where the installed CLI is broken, use `PYTHONPATH=src python3 -c 'from polaris_harness.cli import main; raise SystemExit(main(["--help"]))'` and `PYTHONPATH=src python3 -m pytest -q` with an interpreter that already has the dependencies. A present virtual environment can still be incomplete. Validate every new scenario, evidence, personality, or runtime manifest through the public validator or CLI, then run focused tests and the complete suite.
 
 For consumer integration, record the exact harness commit, scenario id/version, endpoint and clock mode, consumer commit and command, exit result, and ledger path. Passing replay does not remove the physical qualification gate from a firmware release.
 
 ## Report and route
 
-Report the contract, evidence provenance, tests, and what the result does and does not prove. Log the underlying defect in its owning repository and cross-link the harness scenario. Leave unknown camera values unknown and stop if completing the scenario would require invented behavior.
+Report the contract, evidence provenance, test scope and outstanding physical proof. Anyone can run the same procedure from the checkout. Log the underlying defect in its owning repository and cross-link the harness scenario. Leave unknown camera values unknown and stop if completing the scenario would require invented behavior.

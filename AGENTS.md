@@ -4,6 +4,8 @@
 
 This repository is designed for work by multiple independent coding agents. This file is normative guidance for any agent modifying it.
 
+Use the [harness skill](.github/skills/polaris-test-harness/SKILL.md) as a checkout runbook for environment setup, replay and evidence handoff.
+
 Read before coding:
 
 1. `README.md`
