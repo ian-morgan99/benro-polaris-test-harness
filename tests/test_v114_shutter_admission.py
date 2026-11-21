@@ -346,7 +346,7 @@ class NativeShutterFixture(ShutterFixture):
         # The dispatcher takes the header and first eight payload bytes in r0-r3.
         # Longer commands also need the stack tail and are outside this fixture.
         self.invoke(
-            CAMERA_MESSAGE_DISPATCH, 0x2000F000, 0, SHUTTER_SET_COMMAND,
+            CAMERA_MESSAGE_DISPATCH, 0x2000F000, 2, SHUTTER_SET_COMMAND,
             *payload_words,
         )
 
