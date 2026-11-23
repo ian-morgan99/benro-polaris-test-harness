@@ -5,10 +5,15 @@ built driver prefix via POLARIS_PENTAX_DRIVER_PREFIX and pick a body with
 POLARIS_PENTAX_CAMERA=k1ii|k3iii. Without those it skips, so CI stays green.
 
 Verified-working behaviours are asserted. Known v115 defects (see patcher
-#381/#382/#384/#386) are recorded as xfail(strict=True): they must FAIL today,
-and if a fix makes them pass the strict xfail flips to XPASS->error, forcing
-the gate to be updated. That is how a regression like "MF drive silently broke"
-gets caught instead of silently shipping.
+#384/#386/#387) are recorded as xfail(strict=True): they must FAIL today, and if
+a fix makes them pass the strict xfail flips to XPASS->error, forcing the gate to
+be updated. That is how a regression like "imageformat silently broke" gets
+caught instead of silently shipping.
+
+MF drive (#381) is deliberately NOT strict-xfail: its result depends on whether
+vendor mode was already primed earlier in the same session, so a strict marker
+produces a spurious red depending on test order. It records the observed PTP
+response instead, and #381 carries the open question.
 """
 
 import os
@@ -114,11 +119,23 @@ def test_iso_write_reaches_body(body):
     _run(env, port, model, "--set-config", f"iso={cur}")  # restore
 
 
-@pytest.mark.xfail(strict=True, reason="MF drive rejected 0xa00c cross-model (patcher #381)")
-def test_manual_focus_drive_moves(body):
+def test_manual_focus_drive_reports_a_response(body):
+    """Record MF drive behaviour without asserting a fixed outcome (#381).
+
+    Observed on v115: an unprimed session returns vendor response 0xa00c, while
+    a session that already read conditions or wrote a setting can return OK.
+    That makes the pass/fail result order-dependent, so asserting either way
+    here would be a lie. This test only requires the body to answer with a
+    recognisable PTP outcome rather than hanging, and prints the code so the
+    run log carries evidence for #381.
+    """
     key, env, port, model, *_ = body
     rc, out = _run(env, port, model, "--set-config", "manualfocusdrive=3")
-    assert rc == 0, out
+    code = re.search(r"response 0x([0-9a-f]{4})", out)
+    outcome = f"0x{code.group(1)}" if code else ("OK" if rc == 0 else "error")
+    print(f"MFDRIVE {key}: rc={rc} response={outcome}")
+    # A hang or transport failure is a real defect; a vendor code is not.
+    assert rc == 0 or code, f"MF drive produced no PTP outcome: {out[:300]}"
 
 
 @pytest.mark.xfail(strict=True, reason="imageformat write -102 cross-model (patcher #386)")
