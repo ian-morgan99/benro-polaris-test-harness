@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yaml
 
+from . import arm_abi, arm_user
 from .arm_emulator import (
     ARMEmulator,
     FixtureManager,
@@ -1017,6 +1018,9 @@ Exit codes:
         help="Port to bind to (default: 0 = ephemeral)"
     )
     astro_webui_parser.set_defaults(func=astro_webui_command)
+
+    arm_abi.register(subparsers)
+    arm_user.register(subparsers)
 
     # Parse arguments
     args = parser.parse_args(argv)
