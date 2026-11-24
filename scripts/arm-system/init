@@ -1,0 +1,26 @@
+#!/bin/busybox sh
+# Synthetic disk-state fixture on a generic Debian ARM kernel.
+B=/bin/busybox
+$B mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
+$B mount -t proc proc /proc
+finish() { echo "HARNESS $1"; $B sync; $B poweroff -f; while :; do $B sleep 1; done; }
+$B insmod /modules/virtio_mmio.ko || finish DRIVER_ERROR
+$B insmod /modules/virtio_blk.ko || finish DRIVER_ERROR
+for n in 1 2 3 4 5; do [ -b /dev/vda ] && break; $B sleep 1; done
+[ -b /dev/vda ] || finish DISK_MISSING
+token=
+for arg in $($B cat /proc/cmdline); do
+    case "$arg" in harness.token=*) token=${arg#harness.token=} ;; esac
+done
+[ "${#token}" = 32 ] || finish ARG_ERROR
+magic=$($B dd if=/dev/vda bs=16 count=1 2>/dev/null)
+[ "$magic" = POLARIS-ABI-DISK ] || finish BAD_BASE
+$B dd if=/dev/vda of=/sector bs=512 skip=1 count=1 2>/dev/null || finish READ_ERROR
+$B dd if=/dev/zero of=/zero bs=512 count=1 2>/dev/null || finish READ_ERROR
+$B cmp -s /sector /zero || finish "STALE $token $($B head -c 32 /sector)"
+printf %s "$token" > /expected
+$B dd if=/expected of=/dev/vda bs=512 seek=1 conv=notrunc,fsync 2>/dev/null || finish WRITE_ERROR
+$B dd if=/dev/vda of=/sector bs=512 skip=1 count=1 2>/dev/null || finish READ_ERROR
+[ "$($B head -c 32 /sector)" = "$token" ] || finish VERIFY_ERROR
+finish "FRESH $token"

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from . import arm_abi, arm_user
+from . import arm_abi, arm_system, arm_user
 from .arm_emulator import (
     ARMEmulator,
     FixtureManager,
@@ -1021,6 +1021,7 @@ Exit codes:
 
     arm_abi.register(subparsers)
     arm_user.register(subparsers)
+    arm_system.register(subparsers)
 
     # Parse arguments
     args = parser.parse_args(argv)

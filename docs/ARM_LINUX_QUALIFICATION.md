@@ -81,10 +81,46 @@ The implementation here was written independently. The reference RC release
 ships source and checksums; its provisioning script computes kernel and disk
 digests after building. They are not preverified harness guest inputs.
 
-The next qualification level requires a locked generic ARM kernel, initramfs,
-guest packages and base QCOW2, plus two fresh overlays with equivalent outcomes.
-Keep guest creation separate from offline runs. Require no guest credentials,
-restrict egress, and tie any listener/replay claim to the actual process and
-candidate. System mode, guest service replay and physical acceptance remain
-independent results. Generic ARM Linux cannot qualify HiSilicon peripherals,
-Broadcom Wi-Fi, physical USB/PTP timing or camera behaviour.
+
+## Generic ARM system boot and disk isolation
+
+The optional `arm-system` command boots a public Debian ARMv7 kernel and a
+BusyBox initramfs under QEMU TCG on a generic Cortex-A7 machine. A synthetic
+4 MiB disk provides a fixed header and a sector reserved for state. Each fresh
+boot verifies that sector is zero, writes a per-boot challenge, reads it back
+and powers down. A deliberate reboot of the first overlay receives a second
+challenge and must report the **previous** challenge from disk. A separate
+container must start clean again. The runner checks the immutable base hash
+afterwards. JSON contains the pinned inputs, serial transcripts and exit status.
+
+Provision separately on a Linux/amd64 host with Docker, bash, dpkg-deb, GNU
+cpio, gzip and Python 3.12. The build uses an empty context. Keep the two
+public ARM packages and tools image locally for subsequent offline runs.
+The preparation script checks the complete installed tools package inventory
+and both ARM package digests. If Debian rotates a pinned version, retrieve the
+matching signed archive or qualify a revised lock explicitly.
+
+    mkdir -p build/arm-system
+    work=$(realpath build/arm-system)
+    docker build --iidfile "$work/image.id" - < scripts/arm-system/Dockerfile
+    image=$(cat "$work/image.id")
+    id=$(docker create "$image" /bin/true)
+    docker cp "$id:/inputs" "$work/inputs"
+    docker rm "$id"
+    scripts/arm-system/prepare.sh "$work"/inputs/linux-image-6*.deb \
+      "$work"/inputs/busybox*.deb "$image" "$work/bundle"
+
+Retain and review the printed lock digest with its bundle. Run offline with
+`polaris-harness arm-system --bundle "$work/bundle" --lock-sha256 "$approved_digest"`.
+The runner checks the image ID and each input digest before boot. Both QEMU
+and the tools container have networking disabled. Each container runs as UID
+65534 with no capabilities, a read-only root, three read-only file mounts, a
+private tmpfs overlay, and CPU, memory, process and time limits. No KVM,
+USB devices, guest credentials, port forwarding or host bridges are required.
+
+The 2026-11-24 receipt records two independently assembled bundles and six
+boots. No Polaris executable or driver is present in this guest. The next
+scenario needs to stage the hash-verified v115 closure and distinguish process
+startup, listener readiness and shutdown. Record any first missing device or
+IPC dependency before designing a stub. Service replay, physical camera timing,
+HiSilicon peripherals and Broadcom Wi-Fi remain separate qualification levels.
