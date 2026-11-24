@@ -89,9 +89,9 @@ functionality - do not read it as a suppression switch.
 1. **Pool size.** `TCPDATA_PSH_INFO_MAXNUM` was not recovered. A `movw r2,#337`
    appears near the pool code but is an error-report argument (line number), not a
    count. The exhaustion threshold is currently unknown.
-2. **Exposure and permissions of the `tcpack_suppress` iovar** on this build
-   (`/proc/net/<iface>/iovar`, `dhd_priv`, or private ioctl) - requires read-only
-   device inventory, which #68 owns.
+2. **Exposure and permissions of the `tcpack_suppress` iovar** on this build - **RESOLVED, see
+   "Live follow-up" below: not exposed.** No module parameter, no `/proc/bcmdhd`, no `wl` or
+   `dhd_priv`, so it is unreachable from userspace on the shipped image.
 3. **Whether mode 0 is safe.** Disabling suppression changes ACK behaviour for all
    flows; #68's staged plan (identical cold start, camera disconnected, physical
    fallback, no remote radio change) still applies.
@@ -125,12 +125,40 @@ Reliably observed:
   iovar proven to exist statically has **no userspace caller available**. Setting it would need
   a new tool or a driver-side default change - it is not an ops-tunable today.
 
-Still UNKNOWN (blocked by the link drop, not by analysis):
-- Whether `/sys/module/bcmdhd/parameters/disable_proptx` exists at runtime and its mode bits.
-  An earlier read appeared to show value `0`, but that session could not be repeated, so it is
-  recorded as unconfirmed rather than as evidence.
-- The count of exposed parameters and which are writable (44 descriptors statically; sysfs is
-  the authority for permissions on 4.9).
+## Live follow-up (link re-established) - UNKNOWN #2 RESOLVED
+
+Reconnected with `ConnectTimeout=30` plus in-session retries; kex succeeded on the first
+attempt. All of the following was read in single round trips, which is what the flapping link
+tolerates.
+
+**Runtime parameter surface (resolves UNKNOWN #2):**
+- `/sys/module/bcmdhd/parameters` **exists** at runtime.
+- `disable_proptx = 0`, mode bits **644** - root-writable, so it is genuinely settable live.
+- It is the **only** parameter matching `tcp|ack|proptx|arp`. There is no `tcpack_suppress`
+  module parameter, and no `/proc/bcmdhd*` or `/proc/net/bcmdhd*` surface exists either.
+
+**Writability proven, restore verified.** `echo 1 > .../disable_proptx` succeeded and read back
+`1`; the session's `trap ... EXIT INT TERM` restored it. The arm-B session was later killed by a
+link drop mid-window, so restore was re-checked independently: `disable_proptx=0` on the next
+successful read. No untested change persists on the device.
+
+**Idle error rate measured (first reproducible number).** Fixed 180 s window at stock settings:
+`base=1410 after=1410 delta=0 secs=180` - **zero pool errors while associated and idle**.
+This does not reproduce "~230 errors/min while associated" from #171 for the idle case; that
+figure describes load, not association.
+
+**Why the earlier counts disagreed.** `dmesg | grep -c` is not a cumulative counter: the ring
+buffer wraps, so two reads at different times legitimately differ (1182 vs 593 vs 1410). Only a
+delta over a fixed window is meaningful. Use deltas from now on.
+
+**Methodological finding that changes how any future A/B must be run.** Under bulk host->device
+transfer the SSH session dies (`Connection closed by 192.168.0.1 port 22`) - the same signature
+as #171. So an interactive A/B destroys its own measurement channel exactly when load is applied,
+which is the only time errors accumulate. The load arm must therefore be measured **on-device and
+detached**, writing results to a file, rather than through the session that is generating traffic.
+`scripts/issue-29-pool-window.sh` in this directory does that.
+
+### Consequence for the owner's priority question on #68
 
 ### Consequence for the owner's priority question on #68
 The proposed `disable_proptx=1` experiment is **not worth running**, independently of the static
@@ -141,3 +169,15 @@ The deployable lever, if any, is the suppression **mode default** set in `dhd_at
 statically as mode 2) or the pool size - both require a driver-side change plus rebuild, not a
 runtime parameter. That is the boundary at which this offline analysis stops being sufficient and
 a build/flash capability becomes mandatory.
+
+The live check now strengthens rather than weakens that conclusion: `disable_proptx` is settable
+and was exercised, it changed nothing measurable in a 180 s idle window, and statically it has no
+path into the pool. The one runtime control that *is* wired to the pool (`tcpack_suppress` via
+`dhd_iovar_op`) has **no caller available on this device** - no `wl`, no `dhd_priv`, no
+`/proc/bcmdhd`, and it is not a module parameter. So there is currently **no runtime-tunable path
+to the pool at all**, and the A/B the owner asked for cannot be performed with stock tooling.
+
+**Artifact identity tie (verified):** every copy of the analyzed module is
+`sha256 6331425326f59e23c314bbe11f3b24e244e29e8ccca2f7b7cdb51ab0571bba2f`,
+`vermagic=4.9.37 SMP mod_unload ARMv7 p2v8`. The device reports the same 4.9.37 kernel, so the
+static findings apply to the running code.
