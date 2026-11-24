@@ -107,3 +107,37 @@ the pool functions. Keep it as a runtime-only experiment under #68's authorisati
 rules; no rebuild or flash is justified by this evidence. Next offline step per WBS
 2: build the standalone pool stress model once the pool size is recovered from
 `_tdata_psh_info_pool_init`.
+
+## Live observations (partial - link dropped mid-test)
+Device `polaris_d13e86`, reached over the AP at 192.168.0.1 with source bind 192.168.0.4.
+Captured in one successful control-plane session, then the association dropped and could not
+be re-established from this host (`wlp8s0` went DOWN; `bind 192.168.0.4: Cannot assign
+requested address`). Note that after the drop, `ping 192.168.0.1` still succeeded at ~4 ms and
+SSH returned *connection refused* - that is a **different host** on the LAN route via
+192.168.68.1, not the mount. Do not read those responses as device data.
+
+Reliably observed:
+- `dmesg | grep -c` for the pool signature returned **1182** at uptime 18:49 in one read and
+  **593** in another. Those two counts are inconsistent, so **no error rate is claimed here**.
+  A follow-up delta measurement failed because its baseline read errored out. Treat the
+  "~230 errors/min" figure on #171 as unconfirmed by this session either way.
+- `wl`, `dhd_priv`, `nvram` and `dhd` are **not present** on the device, so the `tcpack_suppress`
+  iovar proven to exist statically has **no userspace caller available**. Setting it would need
+  a new tool or a driver-side default change - it is not an ops-tunable today.
+
+Still UNKNOWN (blocked by the link drop, not by analysis):
+- Whether `/sys/module/bcmdhd/parameters/disable_proptx` exists at runtime and its mode bits.
+  An earlier read appeared to show value `0`, but that session could not be repeated, so it is
+  recorded as unconfirmed rather than as evidence.
+- The count of exposed parameters and which are writable (44 descriptors statically; sysfs is
+  the authority for permissions on 4.9).
+
+### Consequence for the owner's priority question on #68
+The proposed `disable_proptx=1` experiment is **not worth running**, independently of the static
+result: statically it has exactly one code reference, in `wl_cfg80211_add_virtual_iface`, with no
+path into the TCP ACK/PSH pool. The live check would only confirm what disassembly already shows.
+
+The deployable lever, if any, is the suppression **mode default** set in `dhd_attach` (observed
+statically as mode 2) or the pool size - both require a driver-side change plus rebuild, not a
+runtime parameter. That is the boundary at which this offline analysis stops being sufficient and
+a build/flash capability becomes mandatory.
