@@ -303,6 +303,10 @@ python3 -m pytest tests/test_evidence_validation.py -v
 python3 -m pytest tests/ -v
 ```
 
+## Testing packaged firmware in ARM Linux
+
+Use the [ARM Linux qualification runbook](docs/ARM_LINUX_QUALIFICATION.md) on validator `main` for the offline ABI, loader, guest boot and packaged service tests. It lists the required private release inputs, exact commands and evidence to retain. The [v115 startup receipt](docs/evidence/issue-28-v115-pgphoto-startup.json) shows how to distinguish an owned HTTP listener from camera readiness. Physical camera timing requires a separate hardware run.
+
 ## Advanced Features
 
 ### 1. Scenario Execution

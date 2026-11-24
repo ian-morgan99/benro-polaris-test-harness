@@ -98,6 +98,10 @@ export POLARIS_ARM_FIXTURES_DIR=/path/to/fixtures/arm
 `dist/` is gitignored. Never commit a built wheel: a committed artifact can drift
 from the commit it claims to come from and then gets mistaken for a release.
 
+## Testing packaged firmware in ARM Linux
+
+Use the [ARM Linux qualification runbook](docs/ARM_LINUX_QUALIFICATION.md) on validator `main` for the offline ABI, loader, guest boot and packaged service tests. It lists the required private release inputs, exact commands and evidence to retain. The [v115 startup receipt](docs/evidence/issue-28-v115-pgphoto-startup.json) shows how to distinguish an owned HTTP listener from camera readiness. Physical camera timing requires a separate hardware run.
+
 ## ARM Emulation (Issue #15) — Agent Usage Guide
 
 The ARM user-space emulation component lives in `src/polaris_harness/arm_emulator/` and is an **independent harness component** — it does not depend on the Polaris protocol scenario engine, runtime verifier, or transport layer.
