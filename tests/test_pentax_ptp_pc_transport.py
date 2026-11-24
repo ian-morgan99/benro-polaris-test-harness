@@ -63,6 +63,59 @@ def _run(env, port, model, *args):
     return r.returncode, r.stdout + r.stderr
 
 
+# Reading every widget with its section-qualified path is the slowest possible
+# pattern. gphoto2 resolves a qualified name by failing its single-widget lookup
+# and then walking the whole settings tree to find it. Measured on a live K-1 II:
+# four qualified paths cost 25.49 s / 209 PTP requests, while the same four by
+# short name cost 2.47 s / 16 requests - with the driver's default 2 s cache, so
+# this is not a cache effect. One gphoto2 invocation also opens one camera
+# session, so batching several --get-config args reuses that session instead of
+# paying init plus vendor-mode enable per widget.
+_BATCH = 24
+
+
+def _batch_get(env, port, model, names):
+    """Read `names` in as few sessions as possible.
+
+    Returns {name: block}. Only leaf names that are unique across the tree are
+    safe to shorten - a duplicated leaf would silently resolve to a different
+    widget - so callers must pass names already proven unique and handle the
+    ambiguous remainder themselves via full paths.
+
+    Output blocks are separated by "Label:" and follow request order, but gphoto2
+    prints no name line, so a short read would mis-attribute results. The block
+    count is therefore checked against the request count and the test fails
+    loudly rather than reporting on the wrong widget.
+    """
+    out = {}
+    for i in range(0, len(names), _BATCH):
+        chunk = names[i:i + _BATCH]
+        args = []
+        for n in chunk:
+            args += ["--get-config", n]
+        rc, text = _run(env, port, model, *args)
+        blocks = re.split(r"(?m)^Label: ", text)[1:]
+        if len(blocks) != len(chunk):
+            pytest.fail(
+                f"batch read returned {len(blocks)} blocks for {len(chunk)} "
+                f"widgets (rc={rc}); refusing to attribute results blindly. "
+                f"Names: {chunk[:5]}...")
+        for name, block in zip(chunk, blocks):
+            out[name] = "Label: " + block
+    return out
+
+
+def _unique_leaves(widgets):
+    """Split widget paths into shortenable leaf names and ambiguous full paths."""
+    from collections import Counter
+    leaves = [w.rsplit("/", 1)[-1] for w in widgets]
+    counts = Counter(leaves)
+    unique = {l for l, c in counts.items() if c == 1}
+    short = [w.rsplit("/", 1)[-1] for w in widgets if w.rsplit("/", 1)[-1] in unique]
+    full = [w.lstrip("/") for w in widgets if w.rsplit("/", 1)[-1] not in unique]
+    return short, full
+
+
 @pytest.fixture(params=["k1ii", "k3iii"])
 def body(request):
     key = request.param
@@ -90,9 +143,18 @@ def test_widget_shape_no_empty_arrays(body):
     rc, listing = _run(env, port, model, "--list-config")
     assert rc == 0, listing
     widgets = [w.strip() for w in listing.splitlines() if w.startswith("/")]
+    short, full = _unique_leaves(widgets)
+    blocks = _batch_get(env, port, model, short)
+    # Ambiguous leaves (same name under two sections) keep the full path so gphoto2
+    # resolves the right widget; those are rare and still cheaper than one session
+    # each, because they share this batch.
+    blocks.update(_batch_get(env, port, model, full))
     empty = []
     for w in widgets:
-        rc, d = _run(env, port, model, "--get-config", w.lstrip("/"))
+        leaf = w.rsplit("/", 1)[-1]
+        d = blocks.get(leaf if leaf in blocks else w.lstrip("/"))
+        if d is None:
+            continue
         if "Type: RADIO" not in d and "Type: MENU" not in d:
             continue
         if "Readonly: 0" not in d:
