@@ -1,0 +1,81 @@
+{
+  "date": "2026-11-24",
+  "harness_commit": "88336a432f7acf2214b9c921ff5247393d4b880d",
+  "scope": "Generic Debian ARM system boot and disk isolation only",
+  "firmware_candidate": null,
+  "camera_stubs": [],
+  "tools_inventory_sha256": "560a8fdfaf05bd4e21e9fb7fee90528a6f207ca7664ff84089b45e28ce53eb92",
+  "busybox_deb_sha256": "2f68dbeaebeda49f3cde34ac421d5add85fb1c837ff7c4a4971945340d9d66ff",
+  "kernel_deb_sha256": "6e64a25739d2f19b03e8bb0166a8c35582e9d83592f3f68e3305209733f49417",
+  "independent_bundle_runs": [
+    {
+      "inputs": {
+        "image": "sha256:ffdbc0294cda1b254a8fde8b8f9fd1245b0ae48e32a51dcf3572b252fa77e30c",
+        "schema": 1,
+        "sha256": {
+          "base.qcow2": "6be5e294278858e6d010de473e65827d001650f66377216ce7d8126da94083ba",
+          "initramfs.gz": "7f34f9e646b3f4d5563a18dac27c2f94a4fe5ca5290ff8bc59050c7363d0ac26",
+          "kernel": "3d4b7ecf3076556dbaa173d30f141c9a594b21427352387fa9875348f7f943bd"
+        }
+      },
+      "level": "qemu-system",
+      "lock_sha256": "1d893a99f14b7c5865de6449ffeae490cfe4e1694d8ffb2f5d925e72ac956d94",
+      "runs": [
+        {
+          "replay_token": "9a9d7a3efb059655f7889539ebc2205c",
+          "returncode": 0,
+          "serial": "[    0.029105] /cpus/cpu@0 missing clock-frequency property\nHARNESS FRESH 9b33019b4df28e4596f4dc4a620aac8d\n[    1.508247] reboot: Power down\n[    0.022289] /cpus/cpu@0 missing clock-frequency property\nHARNESS STALE 9a9d7a3efb059655f7889539ebc2205c 9b33019b4df28e4596f4dc4a620aac8d\n[    1.440109] reboot: Power down\n",
+          "stderr": "",
+          "token": "9b33019b4df28e4596f4dc4a620aac8d"
+        },
+        {
+          "replay_token": "",
+          "returncode": 0,
+          "serial": "[    0.026935] /cpus/cpu@0 missing clock-frequency property\nHARNESS FRESH 2e3c953d9671c7cde2da14db2c056139\n[    1.758894] reboot: Power down\n",
+          "stderr": "",
+          "token": "2e3c953d9671c7cde2da14db2c056139"
+        }
+      ],
+      "scenario": "generic-arm-overlay-isolation-v1",
+      "status": "PASS"
+    },
+    {
+      "inputs": {
+        "image": "sha256:ffdbc0294cda1b254a8fde8b8f9fd1245b0ae48e32a51dcf3572b252fa77e30c",
+        "schema": 1,
+        "sha256": {
+          "base.qcow2": "6be5e294278858e6d010de473e65827d001650f66377216ce7d8126da94083ba",
+          "initramfs.gz": "7f34f9e646b3f4d5563a18dac27c2f94a4fe5ca5290ff8bc59050c7363d0ac26",
+          "kernel": "3d4b7ecf3076556dbaa173d30f141c9a594b21427352387fa9875348f7f943bd"
+        }
+      },
+      "level": "qemu-system",
+      "lock_sha256": "1d893a99f14b7c5865de6449ffeae490cfe4e1694d8ffb2f5d925e72ac956d94",
+      "runs": [
+        {
+          "replay_token": "e68d669247c9b19d91bc639460e7695d",
+          "returncode": 0,
+          "serial": "[    0.023503] /cpus/cpu@0 missing clock-frequency property\nHARNESS FRESH 8035faf1b6431735f22a640df944692d\n[    1.699338] reboot: Power down\n[    0.022244] /cpus/cpu@0 missing clock-frequency property\nHARNESS STALE e68d669247c9b19d91bc639460e7695d 8035faf1b6431735f22a640df944692d\n[    1.441122] reboot: Power down\n",
+          "stderr": "",
+          "token": "8035faf1b6431735f22a640df944692d"
+        },
+        {
+          "replay_token": "",
+          "returncode": 0,
+          "serial": "[    0.020767] /cpus/cpu@0 missing clock-frequency property\nHARNESS FRESH 09c4e1c03f5ccde17b063466b3b430ac\n[    1.625760] reboot: Power down\n",
+          "stderr": "",
+          "token": "09c4e1c03f5ccde17b063466b3b430ac"
+        }
+      ],
+      "scenario": "generic-arm-overlay-isolation-v1",
+      "status": "PASS"
+    }
+  ],
+  "tests": {
+    "passed": 467,
+    "skipped": 21
+  },
+  "guest_pgphoto_startup": "NOT TESTED",
+  "service_replay": "NOT TESTED",
+  "physical": "NOT TESTED"
+}
