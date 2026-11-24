@@ -1,0 +1,66 @@
+{
+  "level": "qemu-system",
+  "scenario": "v115-pgphoto-no-camera-startup",
+  "date": "2026-11-24",
+  "harness_commit": "c94036abaefe5cc54370dd77ddeac33ab8c43495",
+  "driver_commit": "0f2f34e0004011136fa75bf43e215acc0c8b9fdb",
+  "patcher_commit": "f67c6baf5f572073c3fb0890f4e68b1d631de0fa",
+  "abi_receipt_sha256": "5a4c598d1613ad0f7ab7d3b7f4a122959009d93dd9e9e86351fb60cf3bff3383",
+  "appfs_sha256": "9239d21275675456e5795dd7c88e1e28b18e9ae26f0219f4ac2a208272c4ce63",
+  "target": "/app/lib/stage2/pgphoto.stage2ondisk",
+  "candidate_sha256": "fcce947ff5525629f23552fd7ff3feb3e377512dd957522fc95191689bcc1bfb",
+  "guest_bundle_sha256": "1d893a99f14b7c5865de6449ffeae490cfe4e1694d8ffb2f5d925e72ac956d94",
+  "startup_cwd": "/app/bin",
+  "camera_stubs": [],
+  "camera_hardware": "absent",
+  "runs": {
+    "closure": {
+      "checks": {
+        "expected_camera_boundary": true,
+        "ipc_queues": true,
+        "observer_completed": true,
+        "owned_8080_listener": true,
+        "packaged_process": true,
+        "sigterm_exit": true,
+        "stage2_core_and_port": true,
+        "stream_http_response": true
+      },
+      "status": "PASS",
+      "camera_state_286": -2,
+      "init_rc": -2,
+      "SIGTERM_exit": 143,
+      "initramfs_sha256": "e55c41d11fcc4432670806943f494da195bec9523917f2c36cc5e05473e7b7a2",
+      "serial_sha256": "024bc906e1488f18dc5bb9b5da6eaba2dc7a6e7992a84347e04127a969c99ba8"
+    },
+    "legacy": {
+      "checks": {
+        "expected_camera_boundary": true,
+        "ipc_queues": true,
+        "observer_completed": true,
+        "owned_8080_listener": true,
+        "packaged_process": true,
+        "sigterm_exit": true,
+        "stage2_core_and_port": true,
+        "stream_http_response": true
+      },
+      "status": "PASS",
+      "camera_state_286": -5,
+      "init_rc": -105,
+      "SIGTERM_exit": 143,
+      "initramfs_sha256": "b1928c85b54e2802e2e9f35ac8588e117b77c885bdae4e8b93a17ebf150d7e2e",
+      "serial_sha256": "9e718b18894a4cc0c2cb41698e6bac2a61efa4b73b37b3911fa1d348bd6d34d6"
+    }
+  },
+  "qualification": {
+    "direct_process_startup": "PASS",
+    "process_owned_http_listener": "PASS",
+    "sigterm_exit": "PASS",
+    "camera_capture": "NOT TESTED",
+    "watchdog_restart": "NOT TESTED",
+    "polestar_app_replay": "NOT TESTED"
+  },
+  "suite": {
+    "passed": 470,
+    "skipped": 21
+  }
+}
