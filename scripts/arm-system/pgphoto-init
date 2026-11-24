@@ -1,0 +1,61 @@
+#!/bin/busybox sh
+B=/bin/busybox
+$B mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
+$B mount -t proc proc /proc
+$B mkdir -p /sys /app/bin
+cd /app/bin || exit 1
+$B mount -t sysfs sysfs /sys
+$B mkdir -p /tmp /run /var/run /trace
+$B ifconfig lo up
+export PATH=/bin:/usr/bin
+D=/app/lib/stage2
+$B mount -t tracefs tracefs /trace
+for ev in sys_enter_msgget sys_exit_msgget sys_enter_bind sys_exit_bind sys_enter_listen sys_exit_listen; do
+    if [ -f "/trace/events/syscalls/$ev/enable" ]; then echo 1 > "/trace/events/syscalls/$ev/enable"; fi
+done
+echo BEFORE
+$B cat /proc/sysvipc/msg
+$B cat /proc/net/tcp /proc/net/tcp6
+echo LAUNCH
+$B env LD_PRELOAD="$D/libpolaris_stage2.so" LD_LIBRARY_PATH="$D:/app/lib" \
+ CAMLIBS="$D/libgphoto2/2.5.34" IOLIBS="$D/libgphoto2_port/0.12.2" \
+ STAGE2_STORAGE_SHIM=1 STAGE2_TETHER_CAPTURE=1 STAGE2_PENTAX_PREVIEW_BACKOFF=1 \
+ STAGE2_CAPTURE_TRACE=0 STAGE2_CAPTURE_EMPTY_PATH_CHECK=1 STAGE2_SHUTTER_FALLBACK=0 \
+ "$D/pgphoto.stage2ondisk" >/tmp/service.log 2>&1 &
+pid=$!
+for delay in 1 2 5; do
+    $B sleep "$delay"
+    echo "SAMPLE pid=$pid uptime=$($B cut -d' ' -f1 /proc/uptime)"
+    $B cat /proc/net/tcp /proc/net/tcp6
+    [ -d "/proc/$pid" ] || break
+    $B readlink "/proc/$pid/exe"
+    for task in /proc/$pid/task/*; do
+        echo "TASK ${task##*/} $($B cat "$task/comm" "$task/wchan" | $B tr '\n' ' ')"
+    done
+done
+echo SOCKETS
+for fd in /proc/$pid/fd/*; do $B readlink "$fd"; done | $B grep '^socket:'
+echo HTTP
+printf 'GET /?action=stream HTTP/1.0\r\nHost: localhost\r\n\r\n' | $B timeout 3 $B nc 127.0.0.1 8080 | $B head -c 1024 >/tmp/response
+$B head -c 300 /tmp/response
+echo
+echo MAPS
+$B awk '/\.so|pgphoto.stage2ondisk/{print $NF}' "/proc/$pid/maps" 2>/dev/null | $B sort -u
+echo IPC
+$B cat /proc/sysvipc/msg
+$B ls -l /app/lib/libgphoto2_port/0.12.0 2>/dev/null
+echo SERVICE_LOG
+$B head -c 8192 /tmp/service.log
+echo TRACE
+$B tail -80 /trace/trace 2>/dev/null
+if kill -0 "$pid" 2>/dev/null; then
+    echo TERM_SENT
+    kill -TERM "$pid"
+    $B sleep 1
+    if kill -0 "$pid" 2>/dev/null; then echo KILL_SENT; kill -KILL "$pid"; fi
+fi
+wait "$pid"
+echo "SERVICE_EXIT=$?"
+echo GUEST_FINISHED
+$B poweroff -f

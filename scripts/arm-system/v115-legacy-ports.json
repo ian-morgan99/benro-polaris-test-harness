@@ -1,0 +1,14 @@
+{
+  "/app/lib/libgphoto2_port/0.12.0/disk.la": "a7141f3676ed31272a8c774cbe2c0a299830fed66f7f0dfe77e83ef5bd8c38cf",
+  "/app/lib/libgphoto2_port/0.12.0/disk.so": "10feb1b66df389f6fcdf4515eb9ca9bdeb0b67c0af9f57d31c80ac43736d667e",
+  "/app/lib/libgphoto2_port/0.12.0/ptpip.la": "9d9824216d606c806ee302b0b6d6b1a2794232b1f10cf0b26849a0834fe5e2ff",
+  "/app/lib/libgphoto2_port/0.12.0/ptpip.so": "cdb565afcfc9f5328613c926a247f33051227e044ee253fd45cdec21a38181b4",
+  "/app/lib/libgphoto2_port/0.12.0/serial.la": "10b6ad9d3c85caefb5cf80ecff824c5e5c2271089cc2920a6c5868f86aedddc8",
+  "/app/lib/libgphoto2_port/0.12.0/serial.so": "1b3b1215a0bd9c78f8b1b75c548820d9c2b776e9811324f0691a6dd25a624e1e",
+  "/app/lib/libgphoto2_port/0.12.0/usb1.la": "6323e61a9b76d15d5b546f321fd6a5a8df34233749b364e0ac089e5ecf6165a1",
+  "/app/lib/libgphoto2_port/0.12.0/usb1.so": "421c50cc47cec7302d1bcd6ebd0f0bd84f10030dc65d01e0981059f0aa3e9f4f",
+  "/app/lib/libgphoto2_port/0.12.0/usbdiskdirect.la": "341eb68da2965db7caa13b02360ef46511f1d3d1d14ba835a99abadb7fa1a33e",
+  "/app/lib/libgphoto2_port/0.12.0/usbdiskdirect.so": "3e239c8002b70a00d5b1160646d5d550dbd1dea85dddb7da95da66ffa2d99945",
+  "/app/lib/libgphoto2_port/0.12.0/usbscsi.la": "9b924d3227e3522a19db63d51a4da39d25ade2cebf271b1911f623dd76e4b86c",
+  "/app/lib/libgphoto2_port/0.12.0/usbscsi.so": "c60fc14ed14c6a92fc028c6157ba0115ac2cbf232881e9f037058ed49f5ae6b8"
+}

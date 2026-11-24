@@ -119,8 +119,34 @@ private tmpfs overlay, and CPU, memory, process and time limits. No KVM,
 USB devices, guest credentials, port forwarding or host bridges are required.
 
 The 2026-11-24 receipt records two independently assembled bundles and six
-boots. No Polaris executable or driver is present in this guest. The next
-scenario needs to stage the hash-verified v115 closure and distinguish process
-startup, listener readiness and shutdown. Record any first missing device or
-IPC dependency before designing a stub. Service replay, physical camera timing,
-HiSilicon peripherals and Broadcom Wi-Fi remain separate qualification levels.
+boots. That overlay scenario uses public guest inputs only.
+
+## Packaged v115 pgphoto system startup
+
+From a validator environment with the package installed, run the following from
+the checkout. ROOT is the private extracted rootfs with appfs under /app.
+ABI is the v115 stage2.json receipt from the user-mode qualification above.
+BUNDLE is the locked generic ARM guest bundle recorded in the system receipt.
+Use an unused evidence path on a local private filesystem.
+
+    scripts/arm-system/run-pgphoto.sh "$ROOT" "$ABI" "$BUNDLE" build/v115-pgphoto-run
+
+Two fresh RAM-only guests run the same packaged executable from /app/bin with
+no arguments, the wrapper's Stage-2 environment and no optional SD overrides.
+The supervisor and polestar_app are absent. Only loopback is available. The
+first guest contains the audited ELF closure; the second also contains the
+12 shipped files from /app/lib/libgphoto2_port/0.12.0. Their hashes were
+independently extracted from the v115 appfs. Both generated initramfs files
+contain private firmware. Keep the evidence directory private. Publish only
+the receipt, hashes and reviewed observations.
+
+Read result.json alongside closure.log and legacy.log. A passing startup
+requires the Stage-2 slots, both IPC queues, a TCP 8080 socket inode matching
+a pgphoto file descriptor, an HTTP 200 multipart stream response from that
+listener, the expected camera-init result for the selected arm, and exit
+after SIGTERM. A multipart response establishes HTTP readiness. Frame
+delivery requires a separate test. The guest runs a direct executable launch;
+it cannot qualify wrapper supervision, polestar_app command handling or
+physical camera behaviour. Next probe: replay a previously recorded
+read-only IPC request into the real service's no-camera state, matching its
+queue type, response framing and result to the existing evidence contract.
