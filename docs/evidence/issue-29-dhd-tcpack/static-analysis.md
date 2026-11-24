@@ -181,3 +181,66 @@ to the pool at all**, and the A/B the owner asked for cannot be performed with s
 `sha256 6331425326f59e23c314bbe11f3b24e244e29e8ccca2f7b7cdb51ab0571bba2f`,
 `vermagic=4.9.37 SMP mod_unload ARMv7 p2v8`. The device reports the same 4.9.37 kernel, so the
 static findings apply to the running code.
+
+## Mechanism recovered from `dhd_tcpdata_info_get` (0xacf8) - the exhaustion site
+
+**Artifact tie, verified on device:** `/app/komod/bcmdhd.ko` sha256
+`6331425326f59e23c314bbe11f3b24e244e29e8ccca2f7b7cdb51ab0571bba2f`, 1136256 bytes -
+**identical to the analyzed build**. Device `FwVer:6.0.0.54.114`. So these addresses are
+the running code.
+
+**Correction to my own earlier reading.** I first claimed a version mismatch because the
+device logs `dhd_tcpdata_info_get 1056` while my extract showed only lines 889/898/903.
+That was wrong: my `awk '/pattern/,/^$/'` extraction stopped at the first blank line inside
+the function, truncating it to ~45 of its 634 instructions. With a proper function-boundary
+extract, both device-reported line numbers are present in this exact function:
+
+| printk line | address | note |
+|---|---|---|
+| 200   | `0xb304` | `_tdata_psh_info_pool_deq 200: Out of tdata_disc_grp` |
+| 1056  | `0xb324` | `dhd_tcpdata_info_get 1056: No more free tdata_psh_info!!` |
+
+So the two signatures seen on the device originate in one function, and it is the one I
+analyzed. Do not repeat that extraction mistake - awk's range form ends at the first blank
+line, which ARM disassembly listings contain inside functions.
+
+**The mode gate (this is the important part).** Function entry:
+
+```
+acf8  push {r4..lr}
+acfc  add  r8, r0, #4096          @ adapter + 0x1000
+ad04  ldrb r3, [r8, #2312]        @ suppression mode byte (+0x908)
+ad08  cmp  r3, #2
+ad0c  beq  ad1c                   @ mode == 2 -> do the work
+ad10  mov  r0, #0                 @ otherwise -> return NULL
+ad14  add  sp, sp, #92
+ad18  pop  {r4..lr, pc}
+```
+
+`dhd_tcpdata_info_get` does **nothing at all** unless suppression mode is exactly 2 - the
+boot default set in `dhd_attach`. Mode 0 is therefore not "less aggressive suppression"; it
+disables the entire TCP ACK/PSH tracking path. The device is logging these errors precisely
+because it runs in mode 2.
+
+**Mode 0 degrades safely, not crashingly.** The single caller is `dhd_rx_frame` (0x12ab0),
+which calls it at `0x12bfc` and then immediately does `mov r1, r4` - the return value is
+discarded. So a NULL return skips per-flow tracking without dereferencing it. That answers
+UNKNOWN #3 ("is mode 0 safe") for this call site: no crash path exists here. It does not
+prove the feature is *useful* to disable - suppression presumably exists to cut ACK traffic,
+so turning it off may increase wireless load rather than reduce it.
+
+**Pool size still UNKNOWN.** `_tdata_psh_info_pool_init` is not a separate function in this
+build (inlined), and `_tdata_psh_info_pool_enq` (0x9534) is a plain linked-list push at
+offset `0x11c` with no visible capacity check - the cap lives elsewhere, likely in the
+inlined init or in `dhd_tcpdata_info_get` itself. The exhaustion threshold is not recovered
+offline.
+
+### Net position on deployability
+- No runtime path exists to change suppression mode (no `wl`, no `dhd_priv`, no `/proc/bcmdhd`,
+  not a module parameter). Confirmed live.
+- `disable_proptx` is settable but statically unrelated to this path and produced zero delta
+  over a 180 s window.
+- The only lever is a driver-side default change (`dhd_attach`'s `mov r1,#2`) plus rebuild and
+  flash - and the evidence does not yet show that mode 0 would help, only that it is safe at
+  this call site. Recommend against spending a flash on it until the pool size and the
+  load-window error rate are measured with `scripts/pool-window.sh` detached on-device.
