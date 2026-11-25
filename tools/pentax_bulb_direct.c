@@ -10,9 +10,13 @@
 #include <time.h>
 #include <gphoto2/gphoto2-port-log.h>
 
+static double now_s(void);
 static int applied_s=-1;
+static int verbose=0;
+static double t_base=0;
 static void logcb(GPLogLevel level,const char*domain,const char*str,void*data){
 	if(!str)return;
+	if(verbose&&t_base>0) printf("    [%7.3fs] %s\n",now_s()-t_base,str);
 	if(strstr(str,"camera-timed fallback applying")){
 		int n=sscanf(strstr(str,"applying "),"applying %d",&n)==1?n:-1;
 		applied_s=n;
@@ -62,6 +66,7 @@ int main(int argc,char**argv){
 	double hold=argc>3?atof(argv[3]):1.0;
 	int iters=argc>4?atoi(argv[4]):3;
 	int cached=argc>5?atoi(argv[5]):0;
+	verbose=argc>6?atoi(argv[6]):0;
 	CameraAbilitiesList *alist=NULL;CameraAbilities ab;
 	int idx,i,worst=0,edges_ok=1,dur_ok=1;
 	gp_log_add_func(GP_LOG_DEBUG,logcb,NULL);
@@ -89,7 +94,7 @@ int main(int argc,char**argv){
 		s=set_bulb(cam,1); t0=now_s();
 		printf("    start edge: get_config=%.3fs set_value=%.3fs set_config=%.3fs\n",t_gc,t_sv,t_sc);
 		{struct timespec ts={(time_t)hold,(long)((hold-(double)(time_t)hold)*1e9)};nanosleep(&ts,NULL);}
-		sleep_end=now_s(); e=set_bulb(cam,0); stop_cost=now_s()-sleep_end;
+		sleep_end=now_s(); t_base=sleep_end; e=set_bulb(cam,0); stop_cost=now_s()-sleep_end;
 		printf("    stop  edge: get_config=%.3fs set_value=%.3fs set_config=%.3fs\n",t_gc,t_sv,t_sc);
 		held=sleep_end-t0;
 		printf("iter %d: sleep=%.3fs stop_edge=%.3fs  driver applied=%d  start=%d stop=%d\n",
